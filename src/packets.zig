@@ -218,8 +218,45 @@ pub const Label = struct {
 /// DNS Message
 pub const Message = struct {
     allocator: Allocator,
-    pub fn init(alloc: Allocator) !Message {
-        return Message{ .allocator = alloc };
+
+    /// Message header
+    header: Header,
+
+    /// List of messages
+    questions: []Question,
+
+    pub fn from_reader(alloc: Allocator, reader: *Reader) !Message {
+        const header = try Header.from_reader(reader);
+        const questions = try parse_questions(alloc, reader, header.numQuestions);
+        errdefer alloc.free(questions);
+
+        return Message{ .allocator = alloc, .header = header, .questions = questions };
+    }
+
+    /// Parse questions from message bytes
+    /// Note: This must be done AFTER parsing the header
+    fn parse_questions(alloc: Allocator, reader: *Reader, count: u16) ![]Question {
+        var questions: []Question = try alloc.alloc(Question, count);
+        errdefer {
+            for (questions) |*q| {
+                q.deinit();
+            }
+            alloc.free(questions);
+        }
+
+        var i: u16 = 0;
+        while (i < count) : (i += 1) {
+            questions[i] = try Question.from_reader(alloc, reader);
+        }
+
+        return questions;
+    }
+
+    pub fn deinit(self: *Message) void {
+        for (self.questions) |*q| {
+            q.deinit();
+        }
+        self.allocator.free(self.questions);
     }
 };
 
@@ -359,4 +396,16 @@ test "qname parsing" {
     // Validate 'com' label
     try testing.expectEqual(3, qname.labels[1].data.len);
     try testing.expectEqualStrings("com", qname.labels[1].data);
+}
+
+test "message parse" {
+    const alloc = testing.allocator;
+
+    var stream = Reader.fixed(test_query_duckduckgo);
+
+    var message = try Message.from_reader(alloc, &stream);
+    defer message.deinit();
+
+    try testing.expectEqual(1, message.header.numQuestions);
+    try testing.expectEqual(1, message.questions.len);
 }
