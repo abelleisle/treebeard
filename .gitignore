@@ -1,3 +1,10 @@
+# Pre-commit
+/.pre-commit-config.yaml
+
+# Direnv
+.direnv
+
+# Zig
 .zig-cache/
 zig-out/
 *.o
