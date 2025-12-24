@@ -12,8 +12,6 @@ pub const Header = packed struct(u96) {
     transactionID: u16,
 
     /// DNS flags indicating the message metadata
-    /// Note the swapped byte + bit orders from documentation, this it because
-    /// zig packs structs little-endian
     flags: packed struct(u16) {
         // ---------------
         // Byte 1
@@ -64,10 +62,28 @@ pub const Header = packed struct(u96) {
     /// Number of Additional RRs
     numAddRR: u16,
 
-    pub fn from_reader(reader: *Reader) !Header {
-        const header = Header{ .transactionID = try reader.takeInt(u16, .big), .flags = @bitCast(try reader.takeInt(u16, .big)), .numQuestions = try reader.takeInt(u16, .big), .numAnswers = try reader.takeInt(u16, .big), .numAuthRR = try reader.takeInt(u16, .big), .numAddRR = try reader.takeInt(u16, .big) };
+    const LENGTH: u8 = 12;
 
-        return header;
+    pub fn from_reader(reader: *Reader) !Header {
+        // zig fmt: off
+        return Header{
+            .transactionID = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .flags = @bitCast(reader.takeInt(u16, .big) catch return error.NotEnoughBytes),
+            .numQuestions = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .numAnswers = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .numAuthRR = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .numAddRR = reader.takeInt(u16, .big) catch return error.NotEnoughBytes
+        };
+        // zig fmt: on
+    }
+
+    pub fn write(header: *const Header, writer: *Writer) !void {
+        writer.writeInt(u16, header.transactionID, .big) catch return error.NotEnoughBytes;
+        writer.writeInt(u16, @bitCast(header.flags), .big) catch return error.NotEnoughBytes;
+        writer.writeInt(u16, header.numQuestions, .big) catch return error.NotEnoughBytes;
+        writer.writeInt(u16, header.numAnswers, .big) catch return error.NotEnoughBytes;
+        writer.writeInt(u16, header.numAuthRR, .big) catch return error.NotEnoughBytes;
+        writer.writeInt(u16, header.numAddRR, .big) catch return error.NotEnoughBytes;
     }
 };
 
@@ -350,6 +366,24 @@ test "header bit order" {
     try testing.expectEqual(0, header.numAnswers);
     try testing.expectEqual(0, header.numAuthRR);
     try testing.expectEqual(1, header.numAddRR);
+}
+
+test "header write bit order" {
+    var stream = Reader.fixed(test_query_duckduckgo);
+    const header = try Header.from_reader(&stream);
+
+    // Test various destination header lengths
+    inline for (.{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 56 }) |l| {
+        var writeBuf = std.mem.zeroes([l]u8);
+        var writer = Writer.fixed(&writeBuf);
+        if (l < Header.LENGTH) {
+            try testing.expectError(error.NotEnoughBytes, header.write(&writer));
+        } else {
+            try header.write(&writer);
+        }
+
+        try testing.expectEqualSlices(u8, test_query_duckduckgo[0..@min(l, Header.LENGTH)], writer.buffered());
+    }
 }
 
 test "qname parsing" {
