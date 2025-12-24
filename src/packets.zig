@@ -16,24 +16,6 @@ pub const Header = packed struct(u96) {
     /// zig packs structs little-endian
     flags: packed struct(u16) {
         // ---------------
-        // Byte 0
-
-        /// Recursion Desired, indicates if the client means a recursive query.
-        RD: bool,
-
-        /// TrunCation, indicates that this message was truncated due to excessive length.
-        TC: bool,
-
-        /// Authoritative Answer, in a response, indicates if the DNS server is authoritative for the queried hostname.
-        AA: bool,
-
-        /// The type can be QUERY (standard query, 0), IQUERY (inverse query, 1), or STATUS (server status request, 2).
-        OPCODE: Opcode, // u4
-
-        /// Indicates if the message is a query (0) or a reply (1).
-        QR: bool,
-
-        // ---------------
         // Byte 1
 
         /// Response code, can be NOERROR (0), FORMERR (1, Format error), SERVFAIL (2), NXDOMAIN (3, Nonexistent domain), etc.
@@ -50,6 +32,24 @@ pub const Header = packed struct(u96) {
 
         /// Recursion Available, in a response, indicates if the replying DNS server supports recursion.
         RA: bool,
+
+        // ---------------
+        // Byte 0
+
+        /// Recursion Desired, indicates if the client means a recursive query.
+        RD: bool,
+
+        /// TrunCation, indicates that this message was truncated due to excessive length.
+        TC: bool,
+
+        /// Authoritative Answer, in a response, indicates if the DNS server is authoritative for the queried hostname.
+        AA: bool,
+
+        /// The type can be QUERY (standard query, 0), IQUERY (inverse query, 1), or STATUS (server status request, 2).
+        OPCODE: Opcode, // u4
+
+        /// Indicates if the message is a query (0) or a reply (1).
+        QR: bool,
     },
 
     /// Number of Questions
@@ -65,25 +65,7 @@ pub const Header = packed struct(u96) {
     numAddRR: u16,
 
     pub fn from_reader(reader: *Reader) !Header {
-        var bytes = std.mem.zeroes([12]u8);
-
-        reader.readSliceAll(&bytes) catch return error.NotEnoughBytes;
-
-        var header: Header = @bitCast(bytes);
-
-        // If we're running a big endian system, the bytes are already in the
-        // correct order
-        if (builtin.cpu.arch.endian() == .big) {
-            return header;
-        }
-
-        // If we're using little endian, we need to swap the bytes around
-        header.transactionID = @byteSwap(header.transactionID);
-        // header.flags = @bitCast(@byteSwap(@as(u16, @bitCast(header.flags))));
-        header.numQuestions = @byteSwap(header.numQuestions);
-        header.numAnswers = @byteSwap(header.numAnswers);
-        header.numAuthRR = @byteSwap(header.numAuthRR);
-        header.numAddRR = @byteSwap(header.numAddRR);
+        const header = Header{ .transactionID = try reader.takeInt(u16, .big), .flags = @bitCast(try reader.takeInt(u16, .big)), .numQuestions = try reader.takeInt(u16, .big), .numAnswers = try reader.takeInt(u16, .big), .numAuthRR = try reader.takeInt(u16, .big), .numAddRR = try reader.takeInt(u16, .big) };
 
         return header;
     }
@@ -351,7 +333,7 @@ test "header bit order" {
     try testing.expectEqual(0x3e3c, header.transactionID);
 
     // Test flags
-    try testing.expectEqual(0x2001, @as(u16, @bitCast(header.flags)));
+    try testing.expectEqual(0x0120, @as(u16, @bitCast(header.flags)));
     try testing.expectEqual(false, header.flags.QR);
     try testing.expect(header.flags.OPCODE == .query);
     try testing.expectEqual(false, header.flags.AA);
