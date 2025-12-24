@@ -35,7 +35,7 @@ pub fn from_str(alloc: Allocator, domain: []const u8) !QName {
 
         @memcpy(buf, label);
 
-        labelVec.append(Label{ .allocator = alloc, .data = buf });
+        try labelVec.append(alloc, Label{ .allocator = alloc, .data = buf });
     }
 
     return QName{

@@ -142,6 +142,17 @@ pub const Header = packed struct(u96) {
         writer.writeInt(u16, header.numAuthRR, .big) catch return error.NotEnoughBytes;
         writer.writeInt(u16, header.numAddRR, .big) catch return error.NotEnoughBytes;
     }
+
+    pub fn basicQuery(transactionID: u16) Header {
+        return Header{
+            .transactionID = transactionID,
+            .flags = .{ .QR = false, .OPCODE = .query, .AA = false, .TC = false, .RD = true, .RA = false, .Z = 0, .AD = true, .CD = false, .RCODE = .noError },
+            .numQuestions = 1,
+            .numAnswers = 0,
+            .numAuthRR = 0,
+            .numAddRR = 0,
+        };
+    }
 };
 
 //--------------------------------------------------

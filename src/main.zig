@@ -20,6 +20,10 @@ pub fn main() !void {
 }
 
 fn queryDNS(domain: []const u8, record: treebeard.Type) !void {
-    _ = domain;
-    _ = record;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var message = try treebeard.buildQuery(allocator, domain, record);
+    defer message.deinit();
 }
