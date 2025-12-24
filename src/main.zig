@@ -35,7 +35,33 @@ fn queryDNS(domain: []const u8, record: treebeard.Type) !void {
     defer message.deinit();
 
     var buf = std.mem.zeroes([512]u8);
-    const writer = Writer.fixed(&buf);
+    var writer = Writer.fixed(&buf);
 
-    try message.encode(writer);
+    try message.encode(&writer);
+
+    // Get the written slice
+    const written_data = writer.buffered();
+    // Send over UDP
+    const address = try std.net.Address.parseIp("127.0.0.1", 53); // example: DNS port
+    const socket = try std.posix.socket(address.any.family, std.posix.SOCK.DGRAM, std.posix.IPPROTO.UDP);
+    defer std.posix.close(socket);
+
+    var response = std.mem.zeroes([512]u8);
+    _ = try std.posix.sendto(socket, written_data, 0, &address.any, address.getOsSockLen());
+    const recv_len = try std.posix.recv(socket, &response, 0);
+
+    std.debug.print("Recieved length: {d}\n", .{recv_len});
+    std.debug.print("Recieved data:", .{});
+
+    var i: u16 = 0;
+    for (response[0..recv_len]) |b| {
+        std.debug.print(" {x:0>2}", .{b});
+        // std.debug.print(" {d:0>3}", .{b});
+
+        if (@mod(i, 8) == 0) std.debug.print("  ", .{});
+        if (@mod(i, 16) == 0) std.debug.print("\n", .{});
+
+        i += 1;
+    }
+    std.debug.print("\n", .{});
 }
