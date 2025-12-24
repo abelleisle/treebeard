@@ -1,5 +1,12 @@
 const builtin = @import("builtin");
 const std = @import("std");
+
+// IO
+const io = std.io;
+const Writer = io.Writer;
+
+//--------------------------------------------------
+// DNS Helpers
 const treebeard = @import("root.zig");
 
 pub fn main() !void {
@@ -26,4 +33,9 @@ fn queryDNS(domain: []const u8, record: treebeard.Type) !void {
 
     var message = try treebeard.buildQuery(allocator, domain, record);
     defer message.deinit();
+
+    var buf = std.mem.zeroes([512]u8);
+    const writer = Writer.fixed(&buf);
+
+    try message.encode(writer);
 }

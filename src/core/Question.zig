@@ -35,12 +35,26 @@ pub fn from_reader(allocator: Allocator, reader: *Reader) !Question {
     var name = try QName.from_reader(allocator, reader);
     errdefer name.deinit();
 
-    const typeRR = try reader.takeInt(u16, .big);
-    const classCode = try reader.takeInt(u16, .big);
+    // TODO: make sure type and class are valid values
+    const typeRR: codes.Type = try std.meta.intToEnum(codes.Type, try reader.takeInt(u16, .big));
+    const classRR: codes.Class = try std.meta.intToEnum(codes.Class, try reader.takeInt(u16, .big));
 
-    return Question{ .allocator = allocator, .name = name, .typeRR = typeRR, .classCode = classCode };
+    // zig fmt: off
+    return Question{
+        .allocator = allocator,
+        .name = name,
+        .type = typeRR,
+        .class = classRR,
+    };
+    // zig fmt: on
 }
 
 pub fn deinit(self: *Question) void {
     self.name.deinit();
+}
+
+pub fn encode(self: *const Question, writer: *Writer) !void {
+    try self.name.encode(writer);
+    try writer.writeInt(u16, @intFromEnum(self.type), .big);
+    try writer.writeInt(u16, @intFromEnum(self.class), .big);
 }

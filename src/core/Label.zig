@@ -3,6 +3,7 @@ const std = @import("std");
 // IO
 const io = std.io;
 const Reader = io.Reader;
+const Writer = io.Writer;
 
 // Memory
 const Allocator = std.mem.Allocator;
@@ -51,4 +52,17 @@ pub fn from_reader(alloc: Allocator, reader: *Reader) !?Label {
 
 pub fn deinit(self: *Label) void {
     self.allocator.free(self.data);
+}
+
+pub fn encode(self: *const Label, writer: *Writer) !void {
+    const header = LabelHeader{
+        .type = 0,
+        .len = @as(u6, @intCast(self.data.len)),
+    };
+
+    try writer.writeInt(u8, @bitCast(header), .big);
+    const writeLen = try writer.write(self.data);
+    if (writeLen != self.data.len) {
+        return error.NotEnoughBytes;
+    }
 }

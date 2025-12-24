@@ -3,6 +3,7 @@ const std = @import("std");
 // IO
 const io = std.io;
 const Reader = io.Reader;
+const Writer = io.Writer;
 
 // Memory
 const Allocator = std.mem.Allocator;
@@ -69,4 +70,11 @@ pub fn deinit(self: *QName) void {
         l.deinit();
     }
     self.allocator.free(self.labels);
+}
+
+pub fn encode(self: *const QName, writer: *Writer) !void {
+    for (self.labels) |l| {
+        try l.encode(writer);
+    }
+    try writer.writeInt(u8, 0, .big);
 }

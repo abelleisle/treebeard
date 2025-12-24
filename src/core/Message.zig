@@ -60,6 +60,13 @@ pub fn deinit(self: *Message) void {
     self.allocator.free(self.questions);
 }
 
+pub fn encode(self: *const Message, writer: *Writer) !void {
+    try self.header.encode(writer);
+    for (self.questions) |q| {
+        try q.encode(writer);
+    }
+}
+
 //--------------------------------------------------
 // DNS Header
 
@@ -134,7 +141,7 @@ pub const Header = packed struct(u96) {
         // zig fmt: on
     }
 
-    pub fn write(header: *const Header, writer: *Writer) !void {
+    pub fn encode(header: *const Header, writer: *Writer) !void {
         writer.writeInt(u16, header.transactionID, .big) catch return error.NotEnoughBytes;
         writer.writeInt(u16, @bitCast(header.flags), .big) catch return error.NotEnoughBytes;
         writer.writeInt(u16, header.numQuestions, .big) catch return error.NotEnoughBytes;
@@ -197,9 +204,9 @@ test "header write bit order" {
         var writeBuf = std.mem.zeroes([l]u8);
         var writer = Writer.fixed(&writeBuf);
         if (l < Header.LENGTH) {
-            try testing.expectError(error.NotEnoughBytes, header.write(&writer));
+            try testing.expectError(error.NotEnoughBytes, header.encode(&writer));
         } else {
-            try header.write(&writer);
+            try header.encode(&writer);
         }
 
         try testing.expectEqualSlices(u8, t.data.query.duckduckgo[0..@min(l, Header.LENGTH)], writer.buffered());
@@ -218,8 +225,8 @@ test "qname parsing" {
     defer question.deinit();
 
     // Check the easy stuff first
-    try testing.expectEqual(0x0001, question.typeRR);
-    try testing.expectEqual(0x0001, question.classCode);
+    try testing.expectEqual(0x0001, @intFromEnum(question.type));
+    try testing.expectEqual(0x0001, @intFromEnum(question.class));
 
     // Make sure we parsed two labels
     const qname = &question.name;
@@ -244,4 +251,40 @@ test "message parse" {
 
     try testing.expectEqual(1, message.header.numQuestions);
     try testing.expectEqual(1, message.questions.len);
+}
+
+test "basic encode" {
+    const QName = @import("QName.zig");
+    const allocator = testing.allocator;
+
+    var buf = std.mem.zeroes([512]u8);
+    var writer = Writer.fixed(&buf);
+
+    const query = "duckduckgo.com";
+    var qname = try QName.from_str(allocator, query);
+    errdefer qname.deinit();
+
+    const questions: []Question = try allocator.alloc(Question, 1);
+    errdefer {
+        for (questions) |*q| q.deinit();
+        allocator.free(questions);
+    }
+
+    questions[0] = Question{
+        .allocator = allocator,
+        .class = .IN,
+        .type = .A,
+        .name = qname,
+    };
+
+    var message = Message{
+        .allocator = allocator,
+        .header = Header.basicQuery(0x3e3c),
+        .questions = questions,
+    };
+    defer message.deinit();
+
+    try message.encode(&writer);
+
+    try testing.expectEqualSlices(u8, t.data.query.duckduckgo_simple, writer.buffered());
 }

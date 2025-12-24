@@ -12,7 +12,7 @@ pub const QClass = codes.QClass;
 pub const Message = @import("core/Message.zig");
 pub const Header = Message.Header;
 pub const Question = @import("core/Question.zig");
-pub const Qname = @import("core/QName.zig");
+pub const QName = @import("core/QName.zig");
 
 //--------------------------------------------------
 // Local imports
@@ -25,7 +25,7 @@ const Allocator = std.mem.Allocator;
 // DNS Helpers
 
 pub fn buildQuery(allocator: Allocator, query: []const u8, record_type: Type) !Message {
-    var qname = try Qname.from_str(allocator, query);
+    var qname = try QName.from_str(allocator, query);
     errdefer qname.deinit();
 
     const questions: []Question = try allocator.alloc(Question, 1);
