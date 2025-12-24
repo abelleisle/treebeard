@@ -9,6 +9,9 @@ const Reader = io.Reader;
 const Allocator = std.mem.Allocator;
 
 // Core
+const codes = @import("codes.zig");
+const Type = codes.Type;
+const Class = codes.Class;
 const QName = @import("QName.zig");
 
 //--------------------------------------------------
@@ -23,10 +26,10 @@ allocator: Allocator,
 name: QName,
 
 /// Type of RR (A, AAAA, MX, TXT, etc.)
-typeRR: u16,
+type: Type,
 
 /// Class code
-classCode: u16,
+class: Class,
 
 pub fn from_reader(allocator: Allocator, reader: *Reader) !Question {
     var name = try QName.from_reader(allocator, reader);

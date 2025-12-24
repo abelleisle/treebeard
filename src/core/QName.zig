@@ -18,6 +18,32 @@ const QName = @This();
 allocator: Allocator,
 labels: []Label,
 
+pub fn from_str(alloc: Allocator, domain: []const u8) !QName {
+    var labelVec = try std.ArrayList(Label).initCapacity(alloc, 255);
+    defer labelVec.deinit(alloc);
+
+    errdefer {
+        for (labelVec.items) |*l| l.deinit();
+        labelVec.deinit(alloc);
+    }
+
+    var iter = std.mem.splitScalar(u8, domain, '.');
+    while (iter.next()) |label| {
+        if (label.len > Label.MAX_LEN) return error.LabelTooLong;
+        const buf = try alloc.alloc(u8, label.len);
+        errdefer alloc.free(buf);
+
+        @memcpy(buf, label);
+
+        labelVec.append(Label{ .allocator = alloc, .data = buf });
+    }
+
+    return QName{
+        .allocator = alloc,
+        .labels = try labelVec.toOwnedSlice(alloc),
+    };
+}
+
 pub fn from_reader(alloc: Allocator, reader: *Reader) !QName {
     var labelVec = try std.ArrayList(Label).initCapacity(alloc, 255);
     defer labelVec.deinit(alloc);

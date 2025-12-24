@@ -22,7 +22,7 @@ const Label = @This();
 allocator: Allocator,
 data: []const u8,
 
-const MAX_LEN: u8 = 63;
+pub const MAX_LEN: u8 = 63;
 
 /// Label header/type
 /// From: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-10

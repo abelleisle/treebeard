@@ -1,27 +1,25 @@
+const builtin = @import("builtin");
 const std = @import("std");
-const treebeard = @import("treebeard");
+const treebeard = @import("root.zig");
 
 pub fn main() !void {
-    // Prints to stderr, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-    try treebeard.bufferedPrint();
+    const allocator = std.heap.page_allocator;
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    const domain = if (args.len > 1) args[1] else "bitcicle.com";
+    std.debug.print("Querying DNS records for: {s}\n", .{domain});
+
+    inline for (.{ treebeard.Type.A, treebeard.Type.AAAA, treebeard.Type.MX }) |rtype| {
+        const name = @tagName(rtype);
+        std.debug.print("\n=== {s} Records ===\n", .{name});
+        queryDNS(domain, rtype) catch |err| {
+            std.debug.print("Query failed: {}\n", .{err});
+        };
+    }
 }
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
-
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
-        }
-    };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
+fn queryDNS(domain: []const u8, record: treebeard.Type) !void {
+    _ = domain;
+    _ = record;
 }
