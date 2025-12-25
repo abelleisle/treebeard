@@ -39,14 +39,12 @@ pub fn decode(allocator: Allocator, reader: *Reader) !Question {
     const typeRR: codes.Type = try std.meta.intToEnum(codes.Type, try reader.takeInt(u16, .big));
     const classRR: codes.Class = try std.meta.intToEnum(codes.Class, try reader.takeInt(u16, .big));
 
-    // zig fmt: off
     return Question{
         .allocator = allocator,
         .name = name,
         .type = typeRR,
         .class = classRR,
     };
-    // zig fmt: on
 }
 
 pub fn deinit(self: *Question) void {

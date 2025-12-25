@@ -28,51 +28,115 @@ allocator: Allocator,
 header: Header,
 
 /// List of messages
-questions: []Question,
+questions: ArrayList(Question),
 
-records: ArrayList(Record),
+/// List of records
+answers: ArrayList(Record),
 
-pub fn from_reader(alloc: Allocator, reader: *Reader) !Message {
-    const header = try Header.from_reader(reader);
-    const questions = try parse_questions(alloc, reader, header.numQuestions);
-    errdefer alloc.free(questions);
+/// Creates an empty Message, use `addQuestion`, or `addAnswer` to actually
+/// add content to the message.
+pub fn init(alloc: Allocator, transactionID: u16, flags: Header.Flags) Message {
+    return Message{
+        .allocator = alloc,
+        .header = Header{
+            .transactionID = transactionID,
+            .flags = flags,
+            .numQuestions = 0,
+            .numAnswers = 0,
+            .numAuthRR = 0,
+            .numAddRR = 0,
+        },
+        .questions = ArrayList(Question).empty,
+        .answers = ArrayList(Record).empty,
+    };
+}
 
-    return Message{ .allocator = alloc, .header = header, .questions = questions };
+/// Adds the provided question to our message
+pub fn addQuestion(self: *Message, question: Question) !void {
+    try self.questions.append(self.allocator, question);
+    self.header.numQuestions += 1;
+}
+
+/// Adds the provided answer (record) to our message
+pub fn addAnswer(self: *Message, answer: Record) !void {
+    try self.answers.append(self.allocator, answer);
+    self.header.numAnswers += 1;
+}
+
+pub fn decode(alloc: Allocator, reader: *Reader) !Message {
+    const header = try Header.decode(reader);
+
+    var questions = try parse_questions(alloc, reader, header.numQuestions);
+    errdefer {
+        for (questions.items) |*q| q.deinit();
+        questions.deinit(alloc);
+    }
+
+    var answers = try parse_answers(alloc, reader, header.numAnswers);
+    errdefer {
+        for (answers.items) |*a| a.deinit();
+        answers.deinit(alloc);
+    }
+
+    return Message{
+        .allocator = alloc,
+        .header = header,
+        .questions = questions,
+        .answers = answers,
+    };
 }
 
 /// Parse questions from message bytes
 /// Note: This must be done AFTER parsing the header
-fn parse_questions(alloc: Allocator, reader: *Reader, count: u16) ![]Question {
-    var questions: []Question = try alloc.alloc(Question, count);
+fn parse_questions(alloc: Allocator, reader: *Reader, count: u16) !ArrayList(Question) {
+    var questions = try ArrayList(Question).initCapacity(alloc, count);
     errdefer {
-        for (questions) |*q| {
-            q.deinit();
-        }
-        alloc.free(questions);
+        for (questions.items) |*q| q.deinit();
+        questions.deinit(alloc);
     }
 
     var i: u16 = 0;
     while (i < count) : (i += 1) {
-        questions[i] = try Question.from_reader(alloc, reader);
+        const q = try Question.decode(alloc, reader);
+        try questions.append(alloc, q);
     }
 
     return questions;
 }
 
-pub fn deinit(self: *Message) void {
-    for (self.questions) |*q| {
-        q.deinit();
+/// Parse answers from message bytes
+/// Note: This must be done AFTER parsing the header and questions
+fn parse_answers(alloc: Allocator, reader: *Reader, count: u16) !ArrayList(Record) {
+    var answers = try ArrayList(Record).initCapacity(alloc, count);
+    errdefer {
+        for (answers.items) |*a| a.deinit();
+        answers.deinit(alloc);
     }
-    self.allocator.free(self.questions);
 
-    for (self.records.items) |*r| r.deinit();
-    self.records.deinit(self.allocator);
+    var i: u16 = 0;
+    while (i < count) : (i += 1) {
+        const a = try Record.decode(alloc, reader);
+        try answers.append(alloc, a);
+    }
+
+    return answers;
+}
+
+pub fn deinit(self: *Message) void {
+    for (self.questions.items) |*q| q.deinit();
+    self.questions.deinit(self.allocator);
+
+    for (self.answers.items) |*a| a.deinit();
+    self.answers.deinit(self.allocator);
 }
 
 pub fn encode(self: *const Message, writer: *Writer) !void {
     try self.header.encode(writer);
-    for (self.questions) |q| {
+    for (self.questions.items) |q| {
         try q.encode(writer);
+    }
+    for (self.answers.items) |a| {
+        try a.encode(writer);
     }
 }
 
@@ -85,7 +149,24 @@ pub const Header = packed struct(u96) {
     transactionID: u16,
 
     /// DNS flags indicating the message metadata
-    flags: packed struct(u16) {
+    flags: Flags,
+
+    /// Number of Questions
+    numQuestions: u16,
+
+    /// Number of Answers
+    numAnswers: u16,
+
+    /// Number of Authority RRs
+    numAuthRR: u16,
+
+    /// Number of Additional RRs
+    numAddRR: u16,
+
+    const LENGTH: u8 = 12;
+
+    /// DNS flags indicating the message metadata
+    pub const Flags = packed struct(u16) {
         // ---------------
         // Byte 1
 
@@ -121,33 +202,17 @@ pub const Header = packed struct(u96) {
 
         /// Indicates if the message is a query (0) or a reply (1).
         QR: bool,
-    },
+    };
 
-    /// Number of Questions
-    numQuestions: u16,
-
-    /// Number of Answers
-    numAnswers: u16,
-
-    /// Number of Authority RRs
-    numAuthRR: u16,
-
-    /// Number of Additional RRs
-    numAddRR: u16,
-
-    const LENGTH: u8 = 12;
-
-    pub fn from_reader(reader: *Reader) !Header {
-        // zig fmt: off
+    pub fn decode(reader: *Reader) !Header {
         return Header{
             .transactionID = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
             .flags = @bitCast(reader.takeInt(u16, .big) catch return error.NotEnoughBytes),
             .numQuestions = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
             .numAnswers = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
             .numAuthRR = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
-            .numAddRR = reader.takeInt(u16, .big) catch return error.NotEnoughBytes
+            .numAddRR = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
         };
-        // zig fmt: on
     }
 
     pub fn encode(header: *const Header, writer: *Writer) !void {
@@ -162,7 +227,18 @@ pub const Header = packed struct(u96) {
     pub fn basicQuery(transactionID: u16) Header {
         return Header{
             .transactionID = transactionID,
-            .flags = .{ .QR = false, .OPCODE = .query, .AA = false, .TC = false, .RD = true, .RA = false, .Z = 0, .AD = true, .CD = false, .RCODE = .noError },
+            .flags = .{
+                .QR = false,
+                .OPCODE = .query,
+                .AA = false,
+                .TC = false,
+                .RD = true,
+                .RA = false,
+                .Z = 0,
+                .AD = true,
+                .CD = false,
+                .RCODE = .noError,
+            },
             .numQuestions = 1,
             .numAnswers = 0,
             .numAuthRR = 0,
@@ -179,7 +255,7 @@ const t = @import("testing.zig");
 
 test "header bit order" {
     var stream = Reader.fixed(t.data.query.duckduckgo);
-    const header = try Header.from_reader(&stream);
+    const header = try Header.decode(&stream);
 
     // Test transaction ID
     try testing.expectEqual(0x3e3c, header.transactionID);
@@ -206,7 +282,7 @@ test "header bit order" {
 
 test "header write bit order" {
     var stream = Reader.fixed(t.data.query.duckduckgo);
-    const header = try Header.from_reader(&stream);
+    const header = try Header.decode(&stream);
 
     // Test various destination header lengths
     inline for (.{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 56 }) |l| {
@@ -227,10 +303,10 @@ test "qname parsing" {
 
     var stream = Reader.fixed(t.data.query.duckduckgo);
     // Parse header to make sure reader advances.
-    _ = try Header.from_reader(&stream);
+    _ = try Header.decode(&stream);
 
     // Parse our question
-    var question = try Question.from_reader(alloc, &stream);
+    var question = try Question.decode(alloc, &stream);
     defer question.deinit();
 
     // Check the easy stuff first
@@ -239,15 +315,10 @@ test "qname parsing" {
 
     // Make sure we parsed two labels
     const qname = &question.name;
-    try testing.expectEqual(2, qname.labels.len);
+    try testing.expectEqual(2, qname.label_count);
 
-    // Validate 'duckduckgo' label
-    try testing.expectEqual(10, qname.labels[0].data.len);
-    try testing.expectEqualStrings("duckduckgo", qname.labels[0].data);
-
-    // Validate 'com' label
-    try testing.expectEqual(3, qname.labels[1].data.len);
-    try testing.expectEqualStrings("com", qname.labels[1].data);
+    // Make sure we parsed the correct name
+    try testing.expectEqualStrings("duckduckgo.com.", qname.name);
 }
 
 test "message parse" {
@@ -255,11 +326,11 @@ test "message parse" {
 
     var stream = Reader.fixed(t.data.query.duckduckgo);
 
-    var message = try Message.from_reader(alloc, &stream);
+    var message = try Message.decode(alloc, &stream);
     defer message.deinit();
 
     try testing.expectEqual(1, message.header.numQuestions);
-    try testing.expectEqual(1, message.questions.len);
+    try testing.expectEqual(1, message.questions.items.len);
 }
 
 test "basic encode" {
@@ -270,28 +341,31 @@ test "basic encode" {
     var writer = Writer.fixed(&buf);
 
     const query = "duckduckgo.com";
-    var qname = try Name.fromStr(allocator, query);
-    errdefer qname.deinit();
+    var name = try Name.fromStr(allocator, query);
+    errdefer name.deinit();
 
-    const questions: []Question = try allocator.alloc(Question, 1);
-    errdefer {
-        for (questions) |*q| q.deinit();
-        allocator.free(questions);
-    }
-
-    questions[0] = Question{
+    const q = Question{
         .allocator = allocator,
-        .class = .IN,
+        .name = name,
         .type = .A,
-        .name = qname,
+        .class = .IN,
     };
 
-    var message = Message{
-        .allocator = allocator,
-        .header = Header.basicQuery(0x3e3c),
-        .questions = questions,
-    };
+    var message = Message.init(allocator, 0x3e3c, Header.Flags{
+        .QR = false,
+        .OPCODE = .query,
+        .AA = false,
+        .TC = false,
+        .RD = true,
+        .RA = false,
+        .Z = 0,
+        .AD = true,
+        .CD = false,
+        .RCODE = .noError,
+    });
     defer message.deinit();
+
+    try message.addQuestion(q);
 
     try message.encode(&writer);
 

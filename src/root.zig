@@ -51,3 +51,15 @@ pub fn buildQuery(allocator: Allocator, query: []const u8, record_type: Type) !M
 
     return message;
 }
+
+//--------------------------------------------------
+// Test references
+// This ensures all tests in these files are run when executing `zig build test`
+
+test {
+    _ = @import("core/Name.zig");
+    _ = @import("core/Message.zig");
+    _ = @import("core/Question.zig");
+    _ = @import("core/Record.zig");
+    _ = @import("core/codes.zig");
+}

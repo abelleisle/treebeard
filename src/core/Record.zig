@@ -2,7 +2,8 @@ const std = @import("std");
 
 // IO
 const io = std.io;
-const Reader = std.io.Reader;
+const Reader = io.Reader;
+const Writer = io.Writer;
 
 // Memory
 const Allocator = std.mem.Allocator;
@@ -11,6 +12,7 @@ const Allocator = std.mem.Allocator;
 const codes = @import("codes.zig");
 const Type = codes.Type;
 const Class = codes.Class;
+const Name = @import("Name.zig");
 
 //--------------------------------------------------
 // DNS Record
@@ -22,7 +24,7 @@ const Record = @This();
 allocator: Allocator,
 
 /// Name of the node to which this record pertains
-name: []u8,
+name: Name,
 
 /// Type of RR in numeric form (e.g., 15 for MX RRs)
 type: Type,
@@ -39,10 +41,39 @@ rDLength: u16,
 /// Additional RR-specific data
 rData: []u8,
 
-// pub fn decode(reader: *Reader) !Record {
-// }
-//
+// TODO: Free rData when we own the data
 pub fn deinit(self: *Record) void {
-    self.allocator.free(self.name);
-    self.allocator.free(self.rData);
+    self.name.deinit();
+}
+
+// TODO free
+pub fn decode(allocator: Allocator, reader: *Reader) !Record {
+    const n = try Name.decode(allocator, reader);
+    const t = try Type.decode(reader);
+    const c = try Class.decode(reader);
+    const l = try reader.takeInt(u32, .big);
+    const len = try reader.takeInt(u16, .big);
+    const data = try reader.take(len);
+
+    return Record{
+        .allocator = allocator,
+        .name = n,
+        .type = t,
+        .class = c,
+        .ttl = l,
+        .rDLength = len,
+        .rData = data,
+    };
+}
+
+pub fn encode(self: *const Record, writer: *Writer) !void {
+    try self.name.encode(writer);
+    try self.type.encode(writer);
+    try self.class.encode(writer);
+    try writer.writeInt(u32, self.ttl, .big);
+    try writer.writeInt(u16, self.rDLength, .big);
+    const write_len = try writer.write(self.rData);
+    if ((write_len != self.rData.len) and (write_len != self.rDLength)) {
+        return error.NotEnoughBytes;
+    }
 }

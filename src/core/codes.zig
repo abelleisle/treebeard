@@ -1,3 +1,10 @@
+const std = @import("std");
+
+// IO
+const io = std.io;
+const Reader = io.Reader;
+const Writer = io.Writer;
+
 //--------------------------------------------------
 // Header Types
 
@@ -103,6 +110,19 @@ pub const Type = enum(u16) {
 
     /// Service locations
     SRV = 33,
+
+    /// Decode Record type from encoded DNS format
+    pub fn decode(reader: *Reader) !Type {
+        const typeInt: u16 = reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
+        const typeEnum: Type = std.meta.intToEnum(Type, typeInt) catch return error.InvalidType;
+        return typeEnum;
+    }
+
+    /// Encodes Record type to encoded DNS format
+    pub fn encode(self: Type, writer: *Writer) !void {
+        const typeInt: u16 = @intFromEnum(self);
+        try writer.writeInt(u16, typeInt, .big);
+    }
 };
 
 /// QType values
@@ -132,6 +152,19 @@ pub const Class = enum(u16) {
 
     /// Hesoid [Dyer 87]
     HS = 4,
+
+    /// Decode Record class from encoded DNS format
+    pub fn decode(reader: *Reader) !Class {
+        const classInt: u16 = reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
+        const classEnum: Class = std.meta.intToEnum(Class, classInt) catch return error.InvalidClass;
+        return classEnum;
+    }
+
+    /// Encodes Record class to encoded DNS format
+    pub fn encode(self: Class, writer: *Writer) !void {
+        const classInt: u16 = @intFromEnum(self);
+        try writer.writeInt(u16, classInt, .big);
+    }
 };
 
 /// QClass fields appear in question sections of a query.

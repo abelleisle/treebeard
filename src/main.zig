@@ -14,7 +14,7 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    const domain = if (args.len > 1) args[1] else "bitcicle.com.";
+    const domain = if (args.len > 1) args[1] else "bitcicle.com";
     std.debug.print("Querying DNS records for: {s}\n", .{domain});
 
     inline for (.{ treebeard.Type.A, treebeard.Type.AAAA, treebeard.Type.MX }) |rtype| {

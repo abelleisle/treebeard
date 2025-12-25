@@ -20,6 +20,7 @@ const MAX_LABEL_LENGTH: u8 = 63; // Max length of single label
 allocator: Allocator,
 
 name: []u8,
+label_count: usize,
 
 /// Label header/type
 /// From: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-10
@@ -28,22 +29,43 @@ const LabelHeader = packed struct(u8) {
     type: u2,
 };
 
+/// Create an encoded DNS name from human readable string
 pub fn fromStr(allocator: Allocator, domain: []const u8) !Name {
-    if (domain[domain.len - 1] != '.') return error.NoRootDomain;
+    const has_root = domain.len > 0 and domain[domain.len - 1] == '.';
+    const final_len = domain.len + @intFromBool(!has_root);
 
-    const buf = try allocator.dupe(u8, domain);
+    if (final_len > MAX_NAME_LENGTH) {
+        return error.NameTooLong;
+    }
+
+    const buf = try allocator.alloc(u8, final_len);
+    @memcpy(buf[0..domain.len], domain);
+
+    if (!has_root) {
+        buf[domain.len] = '.';
+    }
+
+    // Count labels (excluding empty root label)
+    var count: usize = 0;
+    var iter = std.mem.splitScalar(u8, buf, '.');
+    while (iter.next()) |label| {
+        if (label.len > 0) {
+            count += 1;
+        }
+    }
 
     return Name{
         .allocator = allocator,
         .name = buf,
+        .label_count = count,
     };
 }
 
 /// Given an encoded DNS name buffer, decode it to a human readable version.
 pub fn decode(allocator: Allocator, reader: *Reader) !Name {
-    const len = try getLengthFromBuffer(reader);
+    const info = try getLengthFromBuffer(reader);
 
-    const buf = try allocator.alloc(u8, len);
+    const buf = try allocator.alloc(u8, info.bytes);
     errdefer allocator.free(buf);
 
     try getStrFromBuffer(reader, buf);
@@ -51,6 +73,7 @@ pub fn decode(allocator: Allocator, reader: *Reader) !Name {
     return Name{
         .allocator = allocator,
         .name = buf,
+        .label_count = info.label_count,
     };
 }
 
@@ -68,12 +91,18 @@ pub fn encode(self: *const Name, writer: *Writer) !void {
     }
 }
 
-/// Get the length of the provided name without consuming the buffer.
+const NameInfo = struct {
+    bytes: usize,
+    label_count: usize,
+};
+
+/// Get the length and label count of the provided name without consuming the buffer.
 /// This can be used to determine the buffer length required for `getStrFromBuffer`.
-fn getLengthFromBuffer(reader: *const Reader) !usize {
+fn getLengthFromBuffer(reader: *const Reader) !NameInfo {
     const buffer = reader.buffer; // Get the raw response
     var offset: usize = reader.seek;
     var total: usize = 0;
+    var labels: usize = 0;
     var jumps: usize = 0; // Total number of pointer jumps
 
     const end = @min(reader.end, buffer.len);
@@ -86,12 +115,13 @@ fn getLengthFromBuffer(reader: *const Reader) !usize {
             0b00 => {
                 const length = header.len;
                 if (length == 0) {
-                    return total;
+                    return .{ .bytes = total, .label_count = labels };
                 } else if (length > 63) {
                     return error.LabelTooLong;
                 } else {
                     offset += (1 + length);
                     total += (1 + length); // Add label + '.' sep
+                    labels += 1;
                 }
             },
             // Pointer
@@ -198,8 +228,9 @@ const t = @import("testing.zig");
 test "length decode" {
     var reader = Reader.fixed(t.data.labels.duckduckgo.encoded);
 
-    const length = try getLengthFromBuffer(&reader);
-    try testing.expectEqual(15, length);
+    const info = try getLengthFromBuffer(&reader);
+    try testing.expectEqual(15, info.bytes);
+    try testing.expectEqual(2, info.label_count);
 }
 
 test "basic decode" {
@@ -212,6 +243,7 @@ test "basic decode" {
 
     try testing.expectEqualStrings(t.data.labels.duckduckgo.decoded, name.name);
     try testing.expectEqual(t.data.labels.duckduckgo.decoded.len, name.name.len);
+    try testing.expectEqual(2, name.label_count); // "duckduckgo" and "com"
 }
 
 const compressed_data = &[_]u8{ 0xcd, 0xa4, 0x05, 0x1, 0x2, 0x3, 0x4, 0x5, 0x03, 0xaa, 0xbb, 0xcc, 0x04, 0x1a, 0x2b, 0x3c, 0x4d, 0x00, 0x02, 0xab, 0xcd, 0xc0, 0x02 };
@@ -224,16 +256,18 @@ test "length decode of simple compression" {
     try testing.expectEqual(0x0501, try reader.peekInt(u16, .big));
 
     {
-        const length = try getLengthFromBuffer(&reader);
-        try testing.expectEqual(15, length);
+        const info = try getLengthFromBuffer(&reader);
+        try testing.expectEqual(15, info.bytes);
+        try testing.expectEqual(3, info.label_count);
     }
 
     _ = try reader.take(16); // Move to end of first strings
     try testing.expectEqual(0x02ab, try reader.peekInt(u16, .big));
 
     {
-        const length = try getLengthFromBuffer(&reader);
-        try testing.expectEqual(18, length);
+        const info = try getLengthFromBuffer(&reader);
+        try testing.expectEqual(18, info.bytes);
+        try testing.expectEqual(4, info.label_count);
     }
 }
 
@@ -287,4 +321,26 @@ test "basic encode" {
     try decoded_name.encode(&writer);
 
     try testing.expectEqualSlices(u8, decode_buf, writer.buffered());
+}
+
+test "fromStr with root domain" {
+    const alloc = testing.allocator;
+
+    var name = try Name.fromStr(alloc, "example.com.");
+    defer name.deinit();
+
+    try testing.expectEqualStrings("example.com.", name.name);
+    try testing.expectEqual(12, name.name.len);
+    try testing.expectEqual(2, name.label_count); // "example" and "com"
+}
+
+test "fromStr without root domain" {
+    const alloc = testing.allocator;
+
+    var name = try Name.fromStr(alloc, "example.com");
+    defer name.deinit();
+
+    try testing.expectEqualStrings("example.com.", name.name);
+    try testing.expectEqual(12, name.name.len);
+    try testing.expectEqual(2, name.label_count); // "example" and "com"
 }
