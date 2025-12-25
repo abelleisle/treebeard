@@ -65,8 +65,8 @@ pub fn deinit(self: *Message) void {
     }
     self.allocator.free(self.questions);
 
-    for (self.records) |*r| r.deinit();
-    self.records.deinit();
+    for (self.records.items) |*r| r.deinit();
+    self.records.deinit(self.allocator);
 }
 
 pub fn encode(self: *const Message, writer: *Writer) !void {

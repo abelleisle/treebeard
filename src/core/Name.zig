@@ -42,15 +42,19 @@ pub fn decode(allocator: Allocator, reader: *Reader) !Name {
     };
 }
 
-fn getLengthFromBuffer(reader: *Reader) !usize {
+fn getLengthFromBuffer(reader: *const Reader) !usize {
+    const buffer = reader.buffer; // Get the raw response
+    var offset: usize = reader.seek;
     var total: usize = 0;
+    var jumps: usize = 0; // Total number of pointer jumps
 
-    const buffer = reader.buffered();
-    while ((total < MAX_NAME_BUFFER) and (total < buffer.len)) {
-        const header: LabelHeader = @bitCast(buffer[total]);
+    const end = @min(reader.end, buffer.len);
+
+    while ((total < MAX_NAME_BUFFER) and (offset < end) and (jumps < 10)) {
+        const header: LabelHeader = @bitCast(buffer[offset]);
 
         switch (header.type) {
-            // Standard
+            // Standard Label
             0b00 => {
                 const length = header.len;
                 if (length == 0) {
@@ -58,11 +62,20 @@ fn getLengthFromBuffer(reader: *Reader) !usize {
                 } else if (length > 63) {
                     return error.LabelTooLong;
                 } else {
-                    total += (1 + length);
+                    offset += (1 + length);
+                    total += (1 + length); // Add label + '.' sep
                 }
             },
             // Pointer
-            0b11 => return error.UnsupportedLabelType,
+            0b11 => {
+                if (offset + 1 > buffer.len) return error.InvalidName;
+                const pointer_low: u16 = buffer[offset + 1];
+                const pointer_high: u16 = header.len;
+                const pointer: u16 = (pointer_high << 8) | pointer_low;
+                if (pointer > offset) return error.InvalidPointerAddress;
+                offset = pointer;
+                jumps += 1;
+            },
             // Reserved (unused as of now)
             else => return error.InvalidLabelHeader,
         }
@@ -71,36 +84,69 @@ fn getLengthFromBuffer(reader: *Reader) !usize {
     return error.NameTooLong;
 }
 
-fn getStrFromBuffer(reader: *Reader, buffer: []u8) !void {
-    var offset: usize = 0;
+fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
+    const buffer = reader.buffer;
+    const end = @min(buffer.len, reader.end);
 
-    while ((offset < MAX_NAME_BUFFER) and (offset < buffer.len)) {
-        const header_byte = try reader.takeByte();
-        const header: LabelHeader = @bitCast(header_byte);
+    var parse_offset: usize = reader.seek; // Follows pointers
+    var reader_offset: usize = reader.seek; // Tracks read progress
+    var write_pos: usize = 0;
+    var jumps: usize = 0;
+
+    while ((write_pos < MAX_NAME_BUFFER) and (parse_offset < end) and (jumps < 10)) {
+        const header: LabelHeader = @bitCast(buffer[parse_offset]);
+
+        // Only take if we're still following a non-pointer name
+        // Note: we want to take this byte early in the case we have
+        //       to exit later in the function due to a parsing error.
+        if (parse_offset == reader_offset) {
+            _ = try reader.take(1);
+        }
 
         switch (header.type) {
-            // Standard
+            // Standard label
             0b00 => {
                 const length = header.len;
                 if (length == 0) {
-                    buffer[offset] = '.';
                     return;
                 } else if (length > 63) {
                     return error.LabelTooLong;
                 } else {
-                    const label = try reader.take(length);
-                    if (offset != 0) {
-                        buffer[offset] = '.';
-                        offset += 1;
+                    // Copy label data into output
+                    @memcpy(out[write_pos .. write_pos + length], buffer[parse_offset + 1 .. parse_offset + 1 + length]);
+                    out[write_pos + length] = '.';
+
+                    // Only take if we're still following a non-pointer name
+                    if (parse_offset == reader_offset) {
+                        _ = try reader.take(length);
+                        reader_offset += 1 + length;
                     }
 
-                    @memcpy(buffer[offset .. offset + length], label);
-                    offset += length;
+                    parse_offset += 1 + length;
+                    write_pos += length + 1;
                 }
             },
             // Pointer
-            0b11 => return error.UnsupportedLabelType,
-            // Reserved (unused as of now)
+            0b11 => {
+                if (parse_offset + 1 > buffer.len) return error.InvalidName;
+
+                // Only take if we're still following a non-pointer name
+                if (parse_offset == reader_offset) {
+                    _ = try reader.take(1);
+                    // We're now diverging and following a pointer, we can
+                    // stop consuming bytes from the reader and
+                    // updating `reader_offset`.
+                }
+
+                const pointer_low: u16 = buffer[parse_offset + 1];
+                const pointer_high: u16 = header.len;
+                const pointer: u16 = (pointer_high << 8) | pointer_low;
+                if (pointer >= parse_offset) return error.InvalidPointerAddress;
+
+                parse_offset = pointer;
+                jumps += 1;
+            },
+            // Reserved
             else => return error.InvalidLabelHeader,
         }
     }
@@ -135,4 +181,54 @@ test "basic decode" {
 
     try testing.expectEqualStrings(t.data.labels.duckduckgo.decoded, name.name);
     try testing.expectEqual(t.data.labels.duckduckgo.decoded.len, name.name.len);
+}
+
+const compressed_data = &[_]u8{ 0xcd, 0xa4, 0x05, 0x1, 0x2, 0x3, 0x4, 0x5, 0x03, 0xaa, 0xbb, 0xcc, 0x04, 0x1a, 0x2b, 0x3c, 0x4d, 0x00, 0x02, 0xab, 0xcd, 0xc0, 0x02 };
+
+test "length decode of simple compression" {
+    var reader = Reader.fixed(compressed_data);
+    _ = try reader.takeInt(u16, .big);
+
+    // Jump passed the random start data
+    try testing.expectEqual(0x0501, try reader.peekInt(u16, .big));
+
+    {
+        const length = try getLengthFromBuffer(&reader);
+        try testing.expectEqual(15, length);
+    }
+
+    _ = try reader.take(16); // Move to end of first strings
+    try testing.expectEqual(0x02ab, try reader.peekInt(u16, .big));
+
+    {
+        const length = try getLengthFromBuffer(&reader);
+        try testing.expectEqual(18, length);
+    }
+}
+
+test "decode of simple compression" {
+    const alloc = testing.allocator;
+    var reader = Reader.fixed(compressed_data);
+    _ = try reader.takeInt(u16, .big);
+
+    // Jump passed the random start data
+    try testing.expectEqual(0x0501, try reader.peekInt(u16, .big));
+
+    {
+        var name = try Name.decode(alloc, &reader);
+        defer name.deinit();
+
+        const expected = &[_]u8{ 0x1, 0x2, 0x3, 0x4, 0x5, '.', 0xaa, 0xbb, 0xcc, '.', 0x1a, 0x2b, 0x3c, 0x4d, '.' };
+        try testing.expectEqualSlices(u8, expected, name.name);
+    }
+
+    try testing.expectEqual(0x02ab, try reader.peekInt(u16, .big));
+
+    {
+        var name = try Name.decode(alloc, &reader);
+        defer name.deinit();
+
+        const expected = &[_]u8{ 0xab, 0xcd, '.', 0x1, 0x2, 0x3, 0x4, 0x5, '.', 0xaa, 0xbb, 0xcc, '.', 0x1a, 0x2b, 0x3c, 0x4d, '.' };
+        try testing.expectEqualSlices(u8, expected, name.name);
+    }
 }

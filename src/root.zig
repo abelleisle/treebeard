@@ -13,6 +13,7 @@ pub const Message = @import("core/Message.zig");
 pub const Header = Message.Header;
 pub const Question = @import("core/Question.zig");
 pub const QName = @import("core/QName.zig");
+pub const Record = @import("core/Record.zig");
 
 //--------------------------------------------------
 // Local imports
@@ -30,7 +31,7 @@ pub fn buildQuery(allocator: Allocator, query: []const u8, record_type: Type) !M
 
     const questions: []Question = try allocator.alloc(Question, 1);
     errdefer {
-        for (questions) |q| q.deinit();
+        for (questions) |*q| q.deinit();
         allocator.free(questions);
     }
 
@@ -45,6 +46,7 @@ pub fn buildQuery(allocator: Allocator, query: []const u8, record_type: Type) !M
         .allocator = allocator,
         .header = Header.basicQuery(1234),
         .questions = questions,
+        .records = try std.ArrayList(Record).initCapacity(allocator, 0),
     };
 
     return message;

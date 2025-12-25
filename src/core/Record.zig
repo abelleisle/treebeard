@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 
 // Core
 const codes = @import("codes.zig");
-const Type = codes.RRType;
+const Type = codes.Type;
 const Class = codes.Class;
 
 //--------------------------------------------------
