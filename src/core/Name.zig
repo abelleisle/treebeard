@@ -91,8 +91,12 @@ pub fn encode(self: *const Name, writer: *Writer) !void {
     }
 }
 
+/// Info about the Name.
 const NameInfo = struct {
+    /// Length of name in bytes (including root domain).
     bytes: usize,
+
+    /// How many labels is this name made up of?
     label_count: usize,
 };
 
@@ -130,7 +134,8 @@ fn getLengthFromBuffer(reader: *const Reader) !NameInfo {
                 const pointer_low: u16 = buffer[offset + 1];
                 const pointer_high: u16 = header.len;
                 const pointer: u16 = (pointer_high << 8) | pointer_low;
-                if (pointer > offset) return error.InvalidPointerAddress;
+                // We can only point to previously read names
+                if (pointer >= offset) return error.InvalidPointerAddress;
                 offset = pointer;
                 jumps += 1;
             },
@@ -201,6 +206,7 @@ fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
                 const pointer_low: u16 = buffer[parse_offset + 1];
                 const pointer_high: u16 = header.len;
                 const pointer: u16 = (pointer_high << 8) | pointer_low;
+                // We can only point to previously read names
                 if (pointer >= parse_offset) return error.InvalidPointerAddress;
 
                 parse_offset = pointer;

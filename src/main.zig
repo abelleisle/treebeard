@@ -51,11 +51,21 @@ fn queryDNS(domain: []const u8, record: treebeard.Type) !void {
     _ = try std.posix.sendto(socket, written_data, 0, &address.any, address.getOsSockLen());
     const recv_len = try std.posix.recv(socket, &response, 0);
 
+    var i: u16 = 0;
+    for (response[0..recv_len]) |b| {
+        // std.debug.print(" {d:0>3}", .{b});
+        if (i != 0 and @mod(i, 8) == 0) std.debug.print("  ", .{});
+        if (i != 0 and @mod(i, 16) == 0) std.debug.print("\n", .{});
+        std.debug.print(" {x:0>2}", .{b});
+        i += 1;
+    }
+    std.debug.print("\n", .{});
+
     var reader = Reader.fixed(response[0..recv_len]);
     var msg = try treebeard.Message.decode(allocator, &reader);
     defer msg.deinit();
 
-    for (msg.answers.items) |i| {
-        try i.display();
+    for (msg.answers.items) |a| {
+        try a.display();
     }
 }

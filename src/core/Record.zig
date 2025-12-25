@@ -35,49 +35,125 @@ class: Class,
 /// Count of seconds that the RR stays valid (The maximum is 231−1, which is about 68 years)
 ttl: u32,
 
-/// Length of RDATA field (specified in octets)
-rDLength: u16,
+/// Parsed RDATA
+rdata: RData,
 
-/// Additional RR-specific data
-rData: []u8,
+/// Parsed RDATA based on record type
+const RData = union(enum) {
+    A: [4]u8,
+    AAAA: [16]u8,
+    MX: struct {
+        preference: u16,
+        exchanger: Name,
+    },
+    CNAME: Name,
+    NS: Name,
+    PTR: Name,
+    SOA: struct {
+        mname: Name,
+        rname: Name,
+        serial: u32,
+        refresh: u32,
+        retry: u32,
+        expire: u32,
+        minimum: u32,
+    },
+    Unknown: []u8, // For unimplemented types
 
-// TODO: Free rData when we own the data
-pub fn deinit(self: *Record) void {
-    self.name.deinit();
-}
+    pub fn deinit(self: *RData, allocator: Allocator) void {
+        switch (self.*) {
+            .MX => |*mx| mx.exchanger.deinit(),
+            .CNAME => |*name| name.deinit(),
+            .NS => |*name| name.deinit(),
+            .PTR => |*name| name.deinit(),
+            .SOA => |*soa| {
+                soa.mname.deinit();
+                soa.rname.deinit();
+            },
+            .Unknown => |data| allocator.free(data),
+            else => {},
+        }
+    }
+};
 
-// TODO free
+/// Decode the Record type from the encoded DNS data
 pub fn decode(allocator: Allocator, reader: *Reader) !Record {
-    const n = try Name.decode(allocator, reader);
+    var n = try Name.decode(allocator, reader);
+    errdefer n.deinit();
+
     const t = try Type.decode(reader);
     const c = try Class.decode(reader);
-    const l = try reader.takeInt(u32, .big);
-    const len = try reader.takeInt(u16, .big);
-    const data = try reader.take(len);
+    const ttl = try reader.takeInt(u32, .big);
+    const rdlength = try reader.takeInt(u16, .big);
+
+    // Parse RDATA based on type
+    const rdata = switch (t) {
+        .A => blk: {
+            if (rdlength != 4) return error.InvalidARecord;
+            const data = try reader.take(4);
+            var addr: [4]u8 = undefined;
+            @memcpy(&addr, data);
+            break :blk RData{ .A = addr };
+        },
+        .AAAA => blk: {
+            if (rdlength != 16) return error.InvalidAAAARecord;
+            const data = try reader.take(16);
+            var addr: [16]u8 = undefined;
+            @memcpy(&addr, data);
+            break :blk RData{ .AAAA = addr };
+        },
+        .MX => blk: {
+            if (rdlength < 3) return error.InvalidMXRecord;
+            const pref = try reader.takeInt(u16, .big);
+            const exchanger = try Name.decode(allocator, reader);
+            break :blk RData{ .MX = .{ .preference = pref, .exchanger = exchanger } };
+        },
+        .CNAME => blk: {
+            const cname = try Name.decode(allocator, reader);
+            break :blk RData{ .CNAME = cname };
+        },
+        .NS => blk: {
+            const ns = try Name.decode(allocator, reader);
+            break :blk RData{ .NS = ns };
+        },
+        .PTR => blk: {
+            const ptr = try Name.decode(allocator, reader);
+            break :blk RData{ .PTR = ptr };
+        },
+        else => blk: {
+            const data = try reader.take(rdlength);
+            const owned = try allocator.dupe(u8, data);
+            break :blk RData{ .Unknown = owned };
+        },
+    };
 
     return Record{
         .allocator = allocator,
         .name = n,
         .type = t,
         .class = c,
-        .ttl = l,
-        .rDLength = len,
-        .rData = data,
+        .ttl = ttl,
+        .rdata = rdata,
     };
 }
 
+/// Encode the Record following the DNS encoding spec
 pub fn encode(self: *const Record, writer: *Writer) !void {
     try self.name.encode(writer);
     try self.type.encode(writer);
     try self.class.encode(writer);
     try writer.writeInt(u32, self.ttl, .big);
-    try writer.writeInt(u16, self.rDLength, .big);
-    const write_len = try writer.write(self.rData);
-    if ((write_len != self.rData.len) and (write_len != self.rDLength)) {
-        return error.NotEnoughBytes;
+
+    switch (self.rdata) {
+        .Unknown => |data| {
+            try writer.writeInt(u16, @intCast(data.len), .big);
+            _ = try writer.write(data);
+        },
+        else => return error.EncodeNotImplemented,
     }
 }
 
+/// Print the record in a human-readable way
 pub fn display(self: *const Record) !void {
     std.debug.print("{s} {d} {s} {s}  ", .{
         self.name.name,
@@ -86,35 +162,40 @@ pub fn display(self: *const Record) !void {
         @tagName(self.type),
     });
 
-    switch (self.type) {
-        .A => {
-            if (self.rDLength < 4) return error.InvalidARecord;
-            std.debug.print("{d}.{d}.{d}.{d}", .{
-                self.rData[0],
-                self.rData[1],
-                self.rData[2],
-                self.rData[3],
-            });
+    switch (self.rdata) {
+        .A => |addr| {
+            std.debug.print("{d}.{d}.{d}.{d}", .{ addr[0], addr[1], addr[2], addr[3] });
         },
-        .AAAA => {
-            if (self.rDLength < 16) return error.InvalidAAAARecord;
+        .AAAA => |addr| {
             for (0..8) |j| {
                 if (j > 0) std.debug.print(":", .{});
-                const val = std.mem.readInt(u16, self.rData[j * 2 ..][0..2], .big);
+                const val = std.mem.readInt(u16, addr[j * 2 ..][0..2], .big);
                 std.debug.print("{x}", .{val});
             }
         },
-        .MX => {
-            if (self.rDLength < 2) return error.InvalidMXRecord;
-            const pref = std.mem.readInt(u16, self.rData[0..2], .big);
-            var reader = Reader.fixed(self.rData[2..]);
-            var name = try Name.decode(self.allocator, &reader);
-            defer name.deinit();
-
-            std.debug.print("{d}  {s}", .{ pref, name.name });
+        .MX => |mx| {
+            std.debug.print("{d}  {s}", .{ mx.preference, mx.exchanger.name });
         },
-        else => std.debug.print("Unsupported type: {s}\n", .{@tagName(self.type)}),
+        .CNAME => |name| {
+            std.debug.print("{s}", .{name.name});
+        },
+        .NS => |name| {
+            std.debug.print("{s}", .{name.name});
+        },
+        .PTR => |name| {
+            std.debug.print("{s}", .{name.name});
+        },
+        .Unknown => {
+            std.debug.print("(raw data)", .{});
+        },
+        else => std.debug.print("Unsupported type", .{}),
     }
 
     std.debug.print("\n", .{});
+}
+
+/// Deinit the Record type
+pub fn deinit(self: *Record) void {
+    self.name.deinit();
+    self.rdata.deinit(self.allocator);
 }

@@ -205,7 +205,7 @@ pub const Header = packed struct(u96) {
     };
 
     pub fn decode(reader: *Reader) !Header {
-        return Header{
+        const header = Header{
             .transactionID = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
             .flags = @bitCast(reader.takeInt(u16, .big) catch return error.NotEnoughBytes),
             .numQuestions = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
@@ -213,6 +213,12 @@ pub const Header = packed struct(u96) {
             .numAuthRR = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
             .numAddRR = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
         };
+
+        if (header.flags.TC) {
+            return error.TruncatedMessage;
+        }
+
+        return header;
     }
 
     pub fn encode(header: *const Header, writer: *Writer) !void {
