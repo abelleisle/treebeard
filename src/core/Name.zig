@@ -28,6 +28,17 @@ const LabelHeader = packed struct(u8) {
     type: u2,
 };
 
+pub fn fromStr(allocator: Allocator, domain: []const u8) !Name {
+    if (domain[domain.len - 1] != '.') return error.NoRootDomain;
+
+    const buf = try allocator.dupe(u8, domain);
+
+    return Name{
+        .allocator = allocator,
+        .name = buf,
+    };
+}
+
 /// Given an encoded DNS name buffer, decode it to a human readable version.
 pub fn decode(allocator: Allocator, reader: *Reader) !Name {
     const len = try getLengthFromBuffer(reader);

@@ -12,7 +12,7 @@ const Allocator = std.mem.Allocator;
 const codes = @import("codes.zig");
 const Type = codes.Type;
 const Class = codes.Class;
-const QName = @import("QName.zig");
+const Name = @import("Name.zig");
 
 //--------------------------------------------------
 // DNS Question
@@ -23,7 +23,7 @@ const Question = @This();
 allocator: Allocator,
 
 /// Name of the requested resource
-name: QName,
+name: Name,
 
 /// Type of RR (A, AAAA, MX, TXT, etc.)
 type: Type,
@@ -31,8 +31,8 @@ type: Type,
 /// Class code
 class: Class,
 
-pub fn from_reader(allocator: Allocator, reader: *Reader) !Question {
-    var name = try QName.from_reader(allocator, reader);
+pub fn decode(allocator: Allocator, reader: *Reader) !Question {
+    var name = try Name.decode(allocator, reader);
     errdefer name.deinit();
 
     // TODO: make sure type and class are valid values

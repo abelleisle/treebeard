@@ -263,14 +263,14 @@ test "message parse" {
 }
 
 test "basic encode" {
-    const QName = @import("QName.zig");
+    const Name = @import("Name.zig");
     const allocator = testing.allocator;
 
     var buf = std.mem.zeroes([512]u8);
     var writer = Writer.fixed(&buf);
 
     const query = "duckduckgo.com";
-    var qname = try QName.from_str(allocator, query);
+    var qname = try Name.fromStr(allocator, query);
     errdefer qname.deinit();
 
     const questions: []Question = try allocator.alloc(Question, 1);
