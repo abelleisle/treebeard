@@ -8,11 +8,15 @@ const Reader = io.Reader;
 // Memory
 const Allocator = std.mem.Allocator;
 
+// List
+const ArrayList = std.ArrayList;
+
 // Core
 const codes = @import("codes.zig");
 const ResponseCode = codes.ResponseCode;
 const Opcode = codes.Opcode;
 const Question = @import("Question.zig");
+const Record = @import("Record.zig");
 
 //--------------------------------------------------
 // DNS Message
@@ -25,6 +29,8 @@ header: Header,
 
 /// List of messages
 questions: []Question,
+
+records: ArrayList(Record),
 
 pub fn from_reader(alloc: Allocator, reader: *Reader) !Message {
     const header = try Header.from_reader(reader);
@@ -58,6 +64,9 @@ pub fn deinit(self: *Message) void {
         q.deinit();
     }
     self.allocator.free(self.questions);
+
+    for (self.records) |*r| r.deinit();
+    self.records.deinit();
 }
 
 pub fn encode(self: *const Message, writer: *Writer) !void {
