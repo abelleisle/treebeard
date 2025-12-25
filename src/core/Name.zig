@@ -28,6 +28,7 @@ const LabelHeader = packed struct(u8) {
     type: u2,
 };
 
+/// Given an encoded DNS name buffer, decode it to a human readable version.
 pub fn decode(allocator: Allocator, reader: *Reader) !Name {
     const len = try getLengthFromBuffer(reader);
 
@@ -42,6 +43,22 @@ pub fn decode(allocator: Allocator, reader: *Reader) !Name {
     };
 }
 
+/// Encodes the provided name following the DNS NAME encoding spec
+pub fn encode(self: *const Name, writer: *Writer) !void {
+    var iter = std.mem.splitScalar(u8, self.name, '.');
+    while (iter.next()) |label| {
+        if (label.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
+
+        try writer.writeInt(u8, @intCast(label.len), .big);
+        const written_len = try writer.write(label);
+        if (written_len != label.len) {
+            return error.NotEnoughBytes;
+        }
+    }
+}
+
+/// Get the length of the provided name without consuming the buffer.
+/// This can be used to determine the buffer length required for `getStrFromBuffer`.
 fn getLengthFromBuffer(reader: *const Reader) !usize {
     const buffer = reader.buffer; // Get the raw response
     var offset: usize = reader.seek;
@@ -84,6 +101,8 @@ fn getLengthFromBuffer(reader: *const Reader) !usize {
     return error.NameTooLong;
 }
 
+/// Get the human readable domain name from the encoded buffer.
+/// The resulting string will be placed in `out`.
 fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
     const buffer = reader.buffer;
     const end = @min(buffer.len, reader.end);
@@ -154,6 +173,7 @@ fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
     return error.NameTooLong;
 }
 
+/// Deinits our Name object (frees the name buffer)
 pub fn deinit(self: *Name) void {
     self.allocator.free(self.name);
 }
@@ -231,4 +251,29 @@ test "decode of simple compression" {
         const expected = &[_]u8{ 0xab, 0xcd, '.', 0x1, 0x2, 0x3, 0x4, 0x5, '.', 0xaa, 0xbb, 0xcc, '.', 0x1a, 0x2b, 0x3c, 0x4d, '.' };
         try testing.expectEqualSlices(u8, expected, name.name);
     }
+}
+
+test "basic encode" {
+    const alloc = testing.allocator;
+
+    const decode_buf = &[_]u8{ 0xa, 'd', 'u', 'c', 'k', 'd', 'u', 'c', 'k', 'g', 'o', 3, 'c', 'o', 'm', 0 };
+    var reader = Reader.fixed(decode_buf);
+
+    var decoded_name = try Name.decode(alloc, &reader);
+    defer decoded_name.deinit();
+
+    var encode_buf = std.mem.zeroes([512]u8);
+    var writer = Writer.fixed(&encode_buf);
+
+    // Note, we don't deallocate this name since we don't allocate anything
+    // var encoded_name = Name{
+    //     .allocator = alloc,
+    //     .name = "duckduckgo.com."
+    // };
+
+    try testing.expectEqualSlices(u8, "duckduckgo.com.", decoded_name.name);
+
+    try decoded_name.encode(&writer);
+
+    try testing.expectEqualSlices(u8, decode_buf, writer.buffered());
 }
