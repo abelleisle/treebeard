@@ -18,7 +18,12 @@ pub fn main() !void {
     const domain = if (args.len > 1) args[1] else "bitcicle.com";
     std.debug.print("Querying DNS records for: {s}\n", .{domain});
 
-    inline for (.{ treebeard.Type.A, treebeard.Type.AAAA, treebeard.Type.MX }) |rtype| {
+    inline for (.{
+        treebeard.Type.A,
+        treebeard.Type.AAAA,
+        treebeard.Type.MX,
+        treebeard.Type.TXT,
+    }) |rtype| {
         const name = @tagName(rtype);
         std.debug.print("\n=== {s} Records ===\n", .{name});
         queryDNS(domain, rtype) catch |err| {
