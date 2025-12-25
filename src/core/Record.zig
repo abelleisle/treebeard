@@ -77,3 +77,44 @@ pub fn encode(self: *const Record, writer: *Writer) !void {
         return error.NotEnoughBytes;
     }
 }
+
+pub fn display(self: *const Record) !void {
+    std.debug.print("{s} {d} {s} {s}  ", .{
+        self.name.name,
+        self.ttl,
+        @tagName(self.class),
+        @tagName(self.type),
+    });
+
+    switch (self.type) {
+        .A => {
+            if (self.rDLength < 4) return error.InvalidARecord;
+            std.debug.print("{d}.{d}.{d}.{d}", .{
+                self.rData[0],
+                self.rData[1],
+                self.rData[2],
+                self.rData[3],
+            });
+        },
+        .AAAA => {
+            if (self.rDLength < 16) return error.InvalidAAAARecord;
+            for (0..8) |j| {
+                if (j > 0) std.debug.print(":", .{});
+                const val = std.mem.readInt(u16, self.rData[j * 2 ..][0..2], .big);
+                std.debug.print("{x}", .{val});
+            }
+        },
+        .MX => {
+            if (self.rDLength < 2) return error.InvalidMXRecord;
+            const pref = std.mem.readInt(u16, self.rData[0..2], .big);
+            var reader = Reader.fixed(self.rData[2..]);
+            var name = try Name.decode(self.allocator, &reader);
+            defer name.deinit();
+
+            std.debug.print("{d}  {s}", .{ pref, name.name });
+        },
+        else => std.debug.print("Unsupported type: {s}\n", .{@tagName(self.type)}),
+    }
+
+    std.debug.print("\n", .{});
+}

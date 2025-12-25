@@ -29,25 +29,12 @@ pub fn buildQuery(allocator: Allocator, query: []const u8, record_type: Type) !M
     var name = try Name.fromStr(allocator, query);
     errdefer name.deinit();
 
-    const questions: []Question = try allocator.alloc(Question, 1);
-    errdefer {
-        for (questions) |*q| q.deinit();
-        allocator.free(questions);
-    }
+    const question = Question{ .allocator = allocator, .name = name, .class = .IN, .type = record_type };
 
-    questions[0] = Question{
-        .allocator = allocator,
-        .class = .IN,
-        .type = record_type,
-        .name = name,
-    };
+    const flags = Header.Flags{ .RD = true, .AD = true };
 
-    const message = Message{
-        .allocator = allocator,
-        .header = Header.basicQuery(1234),
-        .questions = questions,
-        .records = try std.ArrayList(Record).initCapacity(allocator, 0),
-    };
+    var message = Message.init(allocator, 1234, flags);
+    try message.addQuestion(question);
 
     return message;
 }

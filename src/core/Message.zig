@@ -171,37 +171,37 @@ pub const Header = packed struct(u96) {
         // Byte 1
 
         /// Response code, can be NOERROR (0), FORMERR (1, Format error), SERVFAIL (2), NXDOMAIN (3, Nonexistent domain), etc.
-        RCODE: ResponseCode, // u4
+        RCODE: ResponseCode = .noError, // u4
 
         /// Checking Disabled, in a query, indicates that non-verified data is acceptable in a response.
-        CD: bool,
+        CD: bool = false,
 
         /// Authentic Data, in a response, indicates if the replying DNS server verified the data.
-        AD: bool,
+        AD: bool = false,
 
         /// Zero, reserved for future use.
         Z: u1 = 0,
 
         /// Recursion Available, in a response, indicates if the replying DNS server supports recursion.
-        RA: bool,
+        RA: bool = false,
 
         // ---------------
         // Byte 0
 
         /// Recursion Desired, indicates if the client means a recursive query.
-        RD: bool,
+        RD: bool = false,
 
         /// TrunCation, indicates that this message was truncated due to excessive length.
-        TC: bool,
+        TC: bool = false,
 
         /// Authoritative Answer, in a response, indicates if the DNS server is authoritative for the queried hostname.
-        AA: bool,
+        AA: bool = false,
 
         /// The type can be QUERY (standard query, 0), IQUERY (inverse query, 1), or STATUS (server status request, 2).
-        OPCODE: Opcode, // u4
+        OPCODE: Opcode = .query, // u4
 
         /// Indicates if the message is a query (0) or a reply (1).
-        QR: bool,
+        QR: bool = false,
     };
 
     pub fn decode(reader: *Reader) !Header {

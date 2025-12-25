@@ -4,6 +4,7 @@ const std = @import("std");
 // IO
 const io = std.io;
 const Writer = io.Writer;
+const Reader = io.Reader;
 
 //--------------------------------------------------
 // DNS Helpers
@@ -50,18 +51,11 @@ fn queryDNS(domain: []const u8, record: treebeard.Type) !void {
     _ = try std.posix.sendto(socket, written_data, 0, &address.any, address.getOsSockLen());
     const recv_len = try std.posix.recv(socket, &response, 0);
 
-    std.debug.print("Recieved length: {d}\n", .{recv_len});
-    std.debug.print("Recieved data:", .{});
+    var reader = Reader.fixed(response[0..recv_len]);
+    var msg = try treebeard.Message.decode(allocator, &reader);
+    defer msg.deinit();
 
-    var i: u16 = 0;
-    for (response[0..recv_len]) |b| {
-        std.debug.print(" {x:0>2}", .{b});
-        // std.debug.print(" {d:0>3}", .{b});
-
-        if (@mod(i, 8) == 0) std.debug.print("  ", .{});
-        if (@mod(i, 16) == 0) std.debug.print("\n", .{});
-
-        i += 1;
+    for (msg.answers.items) |i| {
+        try i.display();
     }
-    std.debug.print("\n", .{});
 }
