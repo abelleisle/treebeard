@@ -58,6 +58,18 @@ const RData = union(enum) {
         expire: u32,
         minimum: u32,
     },
+    TXT: []u8,
+    // SRV: struct {
+    //     service: []u8,
+    //     proto: []u8,
+    //     name: Name,
+    //     ttl: u32,
+    //     class: Class,
+    //     priority: u16,
+    //     weight: u16,
+    //     port: u16,
+    //     target: Name,
+    // },
     Unknown: []u8, // For unimplemented types
 
     pub fn deinit(self: *RData, allocator: Allocator) void {
@@ -69,6 +81,9 @@ const RData = union(enum) {
             .SOA => |*soa| {
                 soa.mname.deinit();
                 soa.rname.deinit();
+            },
+            .TXT => |txt| {
+                allocator.free(txt);
             },
             .Unknown => |data| allocator.free(data),
             else => {},
@@ -120,6 +135,11 @@ pub fn decode(allocator: Allocator, reader: *Reader) !Record {
             const ptr = try Name.decode(allocator, reader);
             break :blk RData{ .PTR = ptr };
         },
+        .TXT => blk: {
+            const data = try reader.take(rdlength);
+            const owned = try allocator.dupe(u8, data);
+            break :blk RData{ .TXT = owned };
+        },
         else => blk: {
             const data = try reader.take(rdlength);
             const owned = try allocator.dupe(u8, data);
@@ -145,6 +165,29 @@ pub fn encode(self: *const Record, writer: *Writer) !void {
     try writer.writeInt(u32, self.ttl, .big);
 
     switch (self.rdata) {
+        .A => |*ip| {
+            const written = try writer.write(ip);
+            if (written != ip.len) {
+                return error.NotEnoughBytes;
+            }
+        },
+        .AAAA => |*ip| {
+            const written = try writer.write(ip);
+            if (written != ip.len) {
+                return error.NotEnoughBytes;
+            }
+        },
+        .CNAME, .NS, .PTR => |*name| try name.encode(writer),
+        .MX => |*mx| {
+            try writer.writeInt(u16, mx.preference, .big);
+            try mx.exchanger.encode(writer);
+        },
+        .TXT => |txt| {
+            const written = try writer.write(txt);
+            if (written != txt.len) {
+                return error.NotEnoughBytes;
+            }
+        },
         .Unknown => |data| {
             try writer.writeInt(u16, @intCast(data.len), .big);
             _ = try writer.write(data);
@@ -184,6 +227,9 @@ pub fn display(self: *const Record) !void {
         },
         .PTR => |name| {
             std.debug.print("{s}", .{name.name});
+        },
+        .TXT => |txt| {
+            std.debug.print("{s}", .{txt});
         },
         .Unknown => {
             std.debug.print("(raw data)", .{});
