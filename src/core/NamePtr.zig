@@ -125,10 +125,13 @@ pub fn encode(self: *Name, writer: *Writer) !void {
         },
         .ptr => |*ptr| {
             if (ptr.prefix) |prefix| {
-                try writer.writeInt(u8, @intCast(prefix.len), .big);
-                const written_len = try writer.write(prefix);
-                if (written_len != prefix.len) {
-                    return error.NotEnoughBytes;
+                // We don't want to write the root domain of a prefix
+                if (prefix.len > 0) {
+                    try writer.writeInt(u8, @intCast(prefix.len), .big);
+                    const written_len = try writer.write(prefix);
+                    if (written_len != prefix.len) {
+                        return error.NotEnoughBytes;
+                    }
                 }
             }
 
@@ -426,11 +429,11 @@ test "pointer encode, no prefix" {
     var encode_buf = std.mem.zeroes([512]u8);
     var writer = Writer.fixed(&encode_buf);
 
-    try writer.writeInt(u16, 0, .big);
+    try writer.writeInt(u16, 0xfb3c, .big);
 
     try target.encode(&writer);
     try pointer.encode(&writer);
 
-    const encoded = &[_]u8{ 0, 0, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0xc0, 0x02 };
+    const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0xc0, 0x02 };
     try testing.expectEqualSlices(u8, encoded, writer.buffered());
 }
