@@ -210,10 +210,16 @@ pub fn display(self: *const Record) !void {
             std.debug.print("{d}.{d}.{d}.{d}", .{ addr[0], addr[1], addr[2], addr[3] });
         },
         .AAAA => |addr| {
+            var zeroTrunc = false;
             for (0..8) |j| {
-                if (j > 0) std.debug.print(":", .{});
                 const val = std.mem.readInt(u16, addr[j * 2 ..][0..2], .big);
-                std.debug.print("{x}", .{val});
+                if (j > 0 and val != 0) std.debug.print(":", .{});
+                if (val != 0) {
+                    std.debug.print("{x}", .{val});
+                } else if (val == 0 and zeroTrunc == false) {
+                    std.debug.print(":", .{});
+                    zeroTrunc = true;
+                }
             }
         },
         .MX => |mx| {
