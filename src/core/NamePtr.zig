@@ -124,12 +124,18 @@ pub fn encode(self: *Name, writer: *Writer) !void {
             }
         },
         .ptr => |*ptr| {
+            self.encode_loc = @intCast(writer.end);
             if (ptr.prefix) |prefix| {
                 // We don't want to write the root domain of a prefix
-                if (prefix.len > 0) {
-                    try writer.writeInt(u8, @intCast(prefix.len), .big);
-                    const written_len = try writer.write(prefix);
-                    if (written_len != prefix.len) {
+
+                var iter = std.mem.splitScalar(u8, prefix, '.');
+                while (iter.next()) |label| {
+                    if (label.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
+                    if (label.len == 0) continue;
+
+                    try writer.writeInt(u8, @intCast(label.len), .big);
+                    const written_len = try writer.write(label);
+                    if (written_len != label.len) {
                         return error.NotEnoughBytes;
                     }
                 }
@@ -459,6 +465,6 @@ test "pointer encode, prefix" {
     try writer.writeInt(u16, 0x9876, .big);
     try pointer.encode(&writer);
 
-    const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0x98, 0x76, 6, 's', 't', 'a', 't', 'i', 'c', 4, 's', 'i', 't', 'e', 0x0C, 0x02 };
+    const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0x98, 0x76, 6, 's', 't', 'a', 't', 'i', 'c', 4, 's', 'i', 't', 'e', 0xC0, 0x02 };
     try testing.expectEqualSlices(u8, encoded, writer.buffered());
 }
