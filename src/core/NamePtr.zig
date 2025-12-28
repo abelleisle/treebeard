@@ -70,7 +70,7 @@ pub fn fromStr(allocator: Allocator, domain: []const u8) !Name {
 pub fn fromPtr(allocator: Allocator, prefix: ?[]const u8, target: *Name) !Name {
     if (prefix) |pfx| {
         const name = try fromStr(allocator, pfx);
-        const buf = brk: switch (name.name) {
+        const buf: []u8 = brk: switch (name.name) {
             .text => |txt| break :brk txt,
             .ptr => return error.InvalidActiveEnum,
         };
@@ -144,6 +144,9 @@ pub fn encode(self: *Name, writer: *Writer) !void {
         },
     }
 }
+
+// pub fn format(self: *const Name, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+// }
 
 /// Info about the Name.
 const NameInfo = struct {
@@ -435,5 +438,27 @@ test "pointer encode, no prefix" {
     try pointer.encode(&writer);
 
     const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0xc0, 0x02 };
+    try testing.expectEqualSlices(u8, encoded, writer.buffered());
+}
+
+test "pointer encode, prefix" {
+    const alloc = testing.allocator;
+
+    var target = try Name.fromStr(alloc, "example.com.");
+    defer target.deinit();
+
+    var pointer = try Name.fromPtr(alloc, "static.site.", &target);
+    defer pointer.deinit();
+
+    var encode_buf = std.mem.zeroes([512]u8);
+    var writer = Writer.fixed(&encode_buf);
+
+    try writer.writeInt(u16, 0xfb3c, .big);
+    try target.encode(&writer);
+
+    try writer.writeInt(u16, 0x9876, .big);
+    try pointer.encode(&writer);
+
+    const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0x98, 0x76, 6, 's', 't', 'a', 't', 'i', 'c', 4, 's', 'i', 't', 'e', 0x0C, 0x02 };
     try testing.expectEqualSlices(u8, encoded, writer.buffered());
 }
