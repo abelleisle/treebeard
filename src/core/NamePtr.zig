@@ -23,10 +23,13 @@ name: NameData,
 label_count: usize,
 encode_loc: ?u14 = null,
 
-const NameData = union(enum) { text: []u8, ptr: struct {
-    prefix: ?[]u8,
-    name: *Name,
-} };
+const NameData = union(enum) {
+    text: [][]u8,
+    ptr: struct {
+        prefix: ?[][]u8,
+        name: *Name,
+    },
+};
 
 /// Label header/type
 /// From: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-10
@@ -37,83 +40,86 @@ const LabelHeader = packed struct(u8) {
 
 /// Create an encoded DNS name from human readable string
 pub fn fromStr(allocator: Allocator, domain: []const u8) !Name {
-    const has_root = domain.len > 0 and domain[domain.len - 1] == '.';
-    const final_len = domain.len + @intFromBool(!has_root);
+    // const has_root = domain.len > 0 and domain[domain.len - 1] == '.';
+    // const final_len = domain.len + @intFromBool(!has_root);
 
-    if (final_len > MAX_NAME_LENGTH) {
-        return error.NameTooLong;
-    }
+    // if (final_len > MAX_NAME_LENGTH) {
+    //     return error.NameTooLong;
+    // }
 
-    const buf = try allocator.alloc(u8, final_len);
-    @memcpy(buf[0..domain.len], domain);
+    // const buf = try allocator.alloc(u8, final_len);
+    // @memcpy(buf[0..domain.len], domain);
 
-    if (!has_root) {
-        buf[domain.len] = '.';
-    }
+    // if (!has_root) {
+    //     buf[domain.len] = '.';
+    // }
 
     // Count labels (excluding empty root label)
     var count: usize = 0;
-    var iter = std.mem.splitScalar(u8, buf, '.');
+    var iter = std.mem.splitScalar(u8, domain, '.');
     while (iter.next()) |label| {
         if (label.len > 0) {
             count += 1;
         }
     }
+    var labels: [][]u8 = try allocator.alloc([]u8, count);
+    errdefer allocator.free(labels);
+
+    count = 0;
+    iter = std.mem.splitScalar(u8, domain, '.');
+    while (iter.next()) |label| {
+        labels[count] = try allocator.alloc(u8, label.len);
+        @memcpy(labels[count], label);
+    }
 
     return Name{
         .allocator = allocator,
-        .name = .{ .text = buf },
+        .name = .{ .text = labels },
         .label_count = count,
     };
 }
 
-pub fn fromPtr(allocator: Allocator, prefix: ?[]const u8, target: *Name) !Name {
-    if (prefix) |pfx| {
-        const name = try fromStr(allocator, pfx);
-        const buf: []u8 = brk: switch (name.name) {
-            .text => |txt| break :brk txt,
-            .ptr => return error.InvalidActiveEnum,
-        };
-        return Name{
-            .allocator = name.allocator,
-            .name = .{ .ptr = .{
-                .prefix = buf,
-                .name = target,
-            } },
-            .label_count = name.label_count + target.label_count,
-        };
-    } else {
-        return Name{
-            .allocator = allocator,
-            .name = .{ .ptr = .{ .prefix = null, .name = target } },
-            .label_count = target.label_count,
-        };
-    }
-}
+// pub fn fromPtr(allocator: Allocator, prefix: ?[]const u8, target: *Name) !Name {
+//     if (prefix) |pfx| {
+//         const name = try fromStr(allocator, pfx);
+//         const buf: []u8 = brk: switch (name.name) {
+//             .text => |txt| break :brk txt,
+//             .ptr => return error.InvalidActiveEnum,
+//         };
+//         return Name{
+//             .allocator = name.allocator,
+//             .name = .{ .ptr = .{
+//                 .prefix = buf,
+//                 .name = target,
+//             } },
+//             .label_count = name.label_count + target.label_count,
+//         };
+//     } else {
+//         return Name{
+//             .allocator = allocator,
+//             .name = .{ .ptr = .{ .prefix = null, .name = target } },
+//             .label_count = target.label_count,
+//         };
+//     }
+// }
 
 /// Given an encoded DNS name buffer, decode it to a human readable version.
 pub fn decode(allocator: Allocator, reader: *Reader) !Name {
-    const info = try getLengthFromBuffer(reader);
-
-    const buf = try allocator.alloc(u8, info.bytes);
-    errdefer allocator.free(buf);
-
-    try getStrFromBuffer(reader, buf);
-
+    const labels = try getLabelsFromBuffer(allocator, reader);
     return Name{
         .allocator = allocator,
-        .name = .{ .text = buf },
-        .label_count = info.label_count,
+        .name = .{ .text = labels },
+        .label_count = labels.len,
     };
 }
 
 /// Encodes the provided name following the DNS NAME encoding spec
 pub fn encode(self: *Name, writer: *Writer) !void {
     switch (self.name) {
-        .text => |text| {
+        .text => |labels| {
             self.encode_loc = @intCast(writer.end);
-            var iter = std.mem.splitScalar(u8, text, '.');
-            while (iter.next()) |label| {
+            // var iter = std.mem.splitScalar(u8, text, '.');
+            for (labels) |label| {
                 if (label.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
 
                 try writer.writeInt(u8, @intCast(label.len), .big);
@@ -122,14 +128,17 @@ pub fn encode(self: *Name, writer: *Writer) !void {
                     return error.NotEnoughBytes;
                 }
             }
+            try writer.writeInt(u8, 0, .big); // Write root domain
         },
         .ptr => |*ptr| {
             if (ptr.prefix) |prefix| {
                 // We don't want to write the root domain of a prefix
-                if (prefix.len > 0) {
-                    try writer.writeInt(u8, @intCast(prefix.len), .big);
-                    const written_len = try writer.write(prefix);
-                    if (written_len != prefix.len) {
+                for (prefix) |label| {
+                    if (label.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
+
+                    try writer.writeInt(u8, @intCast(label.len), .big);
+                    const written_len = try writer.write(label);
+                    if (written_len != label.len) {
                         return error.NotEnoughBytes;
                     }
                 }
@@ -205,17 +214,28 @@ fn getLengthFromBuffer(reader: *const Reader) !NameInfo {
 }
 
 /// Get the human readable domain name from the encoded buffer.
-/// The resulting string will be placed in `out`.
-fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
+/// The resulting labels will be placed in `out`.
+fn getLabelsFromBuffer(allocator: Allocator, reader: *Reader) ![][]u8 {
+    var label: usize = 0;
+    const info = try getLengthFromBuffer(reader);
+    const labels: [][]u8 = try allocator.alloc([]u8, info.label_count);
+    errdefer {
+        var vl: usize = 0;
+        while (vl < label) : (vl += 1) {
+            allocator.free(labels[vl]);
+        }
+        allocator.free(labels);
+    }
+
     const buffer = reader.buffer;
     const end = @min(buffer.len, reader.end);
 
     var parse_offset: usize = reader.seek; // Follows pointers
     var reader_offset: usize = reader.seek; // Tracks read progress
-    var write_pos: usize = 0;
+    var write_length: usize = 0;
     var jumps: usize = 0;
 
-    while ((write_pos < MAX_NAME_BUFFER) and (parse_offset < end) and (jumps < 10)) {
+    while ((write_length < MAX_NAME_BUFFER) and (parse_offset < end) and (jumps < 10)) {
         const header: LabelHeader = @bitCast(buffer[parse_offset]);
 
         // Only take if we're still following a non-pointer name
@@ -230,13 +250,17 @@ fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
             0b00 => {
                 const length = header.len;
                 if (length == 0) {
-                    return;
+                    return labels;
                 } else if (length > 63) {
                     return error.LabelTooLong;
                 } else {
                     // Copy label data into output
-                    @memcpy(out[write_pos .. write_pos + length], buffer[parse_offset + 1 .. parse_offset + 1 + length]);
-                    out[write_pos + length] = '.';
+                    // @memcpy(out[write_pos .. write_pos + length], buffer[parse_offset + 1 .. parse_offset + 1 + length]);
+                    // out[write_pos + length] = '.';
+                    labels[label] = try allocator.alloc(u8, length);
+                    @memcpy(labels[label], buffer[parse_offset + 1 .. parse_offset + 1 + length]);
+                    write_length += length;
+                    label += 1;
 
                     // Only take if we're still following a non-pointer name
                     if (parse_offset == reader_offset) {
@@ -245,7 +269,6 @@ fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
                     }
 
                     parse_offset += 1 + length;
-                    write_pos += length + 1;
                 }
             },
             // Pointer
@@ -280,9 +303,19 @@ fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
 /// Deinits our Name object (frees the name buffer)
 pub fn deinit(self: *Name) void {
     switch (self.name) {
-        .text => |txt| self.allocator.free(txt),
+        .text => |labels| {
+            for (labels) |l| {
+                self.allocator.free(l);
+            }
+            self.allocator.free(labels);
+        },
         .ptr => |*ptr| {
-            if (ptr.prefix) |p| self.allocator.free(p);
+            if (ptr.prefix) |prefix| {
+                for (prefix) |p| {
+                    self.allocator.free(p);
+                }
+                self.allocator.free(prefix);
+            }
         },
     }
 }
@@ -420,45 +453,45 @@ test "fromStr without root domain" {
     try testing.expectEqual(2, name.label_count); // "example" and "com"
 }
 
-test "pointer encode, no prefix" {
-    const alloc = testing.allocator;
-
-    var target = try Name.fromStr(alloc, "example.com.");
-    defer target.deinit();
-
-    var pointer = try Name.fromPtr(alloc, null, &target);
-    defer pointer.deinit();
-
-    var encode_buf = std.mem.zeroes([512]u8);
-    var writer = Writer.fixed(&encode_buf);
-
-    try writer.writeInt(u16, 0xfb3c, .big);
-
-    try target.encode(&writer);
-    try pointer.encode(&writer);
-
-    const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0xc0, 0x02 };
-    try testing.expectEqualSlices(u8, encoded, writer.buffered());
-}
-
-test "pointer encode, prefix" {
-    const alloc = testing.allocator;
-
-    var target = try Name.fromStr(alloc, "example.com.");
-    defer target.deinit();
-
-    var pointer = try Name.fromPtr(alloc, "static.site.", &target);
-    defer pointer.deinit();
-
-    var encode_buf = std.mem.zeroes([512]u8);
-    var writer = Writer.fixed(&encode_buf);
-
-    try writer.writeInt(u16, 0xfb3c, .big);
-    try target.encode(&writer);
-
-    try writer.writeInt(u16, 0x9876, .big);
-    try pointer.encode(&writer);
-
-    const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0x98, 0x76, 6, 's', 't', 'a', 't', 'i', 'c', 4, 's', 'i', 't', 'e', 0x0C, 0x02 };
-    try testing.expectEqualSlices(u8, encoded, writer.buffered());
-}
+// test "pointer encode, no prefix" {
+//     const alloc = testing.allocator;
+//
+//     var target = try Name.fromStr(alloc, "example.com.");
+//     defer target.deinit();
+//
+//     var pointer = try Name.fromPtr(alloc, null, &target);
+//     defer pointer.deinit();
+//
+//     var encode_buf = std.mem.zeroes([512]u8);
+//     var writer = Writer.fixed(&encode_buf);
+//
+//     try writer.writeInt(u16, 0xfb3c, .big);
+//
+//     try target.encode(&writer);
+//     try pointer.encode(&writer);
+//
+//     const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0xc0, 0x02 };
+//     try testing.expectEqualSlices(u8, encoded, writer.buffered());
+// }
+//
+// test "pointer encode, prefix" {
+//     const alloc = testing.allocator;
+//
+//     var target = try Name.fromStr(alloc, "example.com.");
+//     defer target.deinit();
+//
+//     var pointer = try Name.fromPtr(alloc, "static.site", &target);
+//     defer pointer.deinit();
+//
+//     var encode_buf = std.mem.zeroes([512]u8);
+//     var writer = Writer.fixed(&encode_buf);
+//
+//     try writer.writeInt(u16, 0xfb3c, .big);
+//     try target.encode(&writer);
+//
+//     try writer.writeInt(u16, 0x9876, .big);
+//     try pointer.encode(&writer);
+//
+//     const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0x98, 0x76, 6, 's', 't', 'a', 't', 'i', 'c', 4, 's', 'i', 't', 'e', 0x0C, 0x02 };
+//     try testing.expectEqualSlices(u8, encoded, writer.buffered());
+// }
