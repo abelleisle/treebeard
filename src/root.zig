@@ -1,6 +1,6 @@
 //--------------------------------------------------
 // DNS Exports
-const codes = @import("core/codes.zig");
+const codes = @import("dns/codes.zig");
 
 pub const Opcode = codes.Opcode;
 pub const ResponseCode = codes.ResponseCode;
@@ -9,11 +9,11 @@ pub const QType = codes.QType;
 pub const Class = codes.Class;
 pub const QClass = codes.QClass;
 
-pub const Message = @import("core/Message.zig");
+pub const Message = @import("dns/Message.zig");
 pub const Header = Message.Header;
-pub const Question = @import("core/Question.zig");
-pub const Name = @import("core/Name.zig");
-pub const Record = @import("core/Record.zig");
+pub const Question = @import("dns/Question.zig");
+pub const Name = @import("dns/Name.zig");
+pub const Record = @import("dns/Record.zig");
 
 //--------------------------------------------------
 // Local imports
@@ -44,9 +44,9 @@ pub fn buildQuery(allocator: Allocator, query: []const u8, record_type: Type) !M
 // This ensures all tests in these files are run when executing `zig build test`
 
 test {
-    _ = @import("core/Name.zig");
-    _ = @import("core/Message.zig");
-    _ = @import("core/Question.zig");
-    _ = @import("core/Record.zig");
-    _ = @import("core/codes.zig");
+    _ = @import("dns/Name.zig");
+    _ = @import("dns/Message.zig");
+    _ = @import("dns/Question.zig");
+    _ = @import("dns/Record.zig");
+    _ = @import("dns/codes.zig");
 }
