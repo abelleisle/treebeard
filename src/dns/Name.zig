@@ -19,8 +19,31 @@ const MAX_LABEL_LENGTH: u8 = 63; // Max length of single label
 
 allocator: Allocator,
 
-name: []u8,
+name: NameData,
 label_count: usize,
+encode_loc: ?u14 = null,
+
+const NameData = union(enum) {
+    text: []u8,
+    ptr: struct {
+        prefix: ?[]u8,
+        name: *Name,
+    },
+
+    pub fn format(self: *const NameData, writer: anytype) !void {
+        switch (self.*) {
+            .text => |text| {
+                try writer.print("{s}", .{text});
+            },
+            .ptr => |ptr| {
+                if (ptr.prefix) |pfx| {
+                    try writer.print("{s}.", .{pfx});
+                }
+                try ptr.name.name.format(writer);
+            },
+        }
+    }
+};
 
 /// Label header/type
 /// From: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-10
@@ -56,9 +79,33 @@ pub fn fromStr(allocator: Allocator, domain: []const u8) !Name {
 
     return Name{
         .allocator = allocator,
-        .name = buf,
+        .name = .{ .text = buf },
         .label_count = count,
     };
+}
+
+pub fn fromPtr(allocator: Allocator, prefix: ?[]const u8, target: *Name) !Name {
+    if (prefix) |pfx| {
+        const name = try fromStr(allocator, pfx);
+        const buf: []u8 = brk: switch (name.name) {
+            .text => |txt| break :brk txt,
+            .ptr => return error.InvalidActiveEnum,
+        };
+        return Name{
+            .allocator = name.allocator,
+            .name = .{ .ptr = .{
+                .prefix = buf,
+                .name = target,
+            } },
+            .label_count = name.label_count + target.label_count,
+        };
+    } else {
+        return Name{
+            .allocator = allocator,
+            .name = .{ .ptr = .{ .prefix = null, .name = target } },
+            .label_count = target.label_count,
+        };
+    }
 }
 
 /// Given an encoded DNS name buffer, decode it to a human readable version.
@@ -72,22 +119,52 @@ pub fn decode(allocator: Allocator, reader: *Reader) !Name {
 
     return Name{
         .allocator = allocator,
-        .name = buf,
+        .name = .{ .text = buf },
         .label_count = info.label_count,
     };
 }
 
 /// Encodes the provided name following the DNS NAME encoding spec
-pub fn encode(self: *const Name, writer: *Writer) !void {
-    var iter = std.mem.splitScalar(u8, self.name, '.');
-    while (iter.next()) |label| {
-        if (label.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
+pub fn encode(self: *Name, writer: *Writer) !void {
+    switch (self.name) {
+        .text => |text| {
+            self.encode_loc = @intCast(writer.end);
+            var iter = std.mem.splitScalar(u8, text, '.');
+            while (iter.next()) |label| {
+                if (label.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
 
-        try writer.writeInt(u8, @intCast(label.len), .big);
-        const written_len = try writer.write(label);
-        if (written_len != label.len) {
-            return error.NotEnoughBytes;
-        }
+                try writer.writeInt(u8, @intCast(label.len), .big);
+                const written_len = try writer.write(label);
+                if (written_len != label.len) {
+                    return error.NotEnoughBytes;
+                }
+            }
+        },
+        .ptr => |*ptr| {
+            self.encode_loc = @intCast(writer.end);
+            if (ptr.prefix) |prefix| {
+                // We don't want to write the root domain of a prefix
+
+                var iter = std.mem.splitScalar(u8, prefix, '.');
+                while (iter.next()) |label| {
+                    if (label.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
+                    if (label.len == 0) continue;
+
+                    try writer.writeInt(u8, @intCast(label.len), .big);
+                    const written_len = try writer.write(label);
+                    if (written_len != label.len) {
+                        return error.NotEnoughBytes;
+                    }
+                }
+            }
+
+            if (ptr.name.encode_loc) |loc| {
+                const header: u16 = 0xC000 | @as(u16, @intCast(loc));
+                try writer.writeInt(u16, header, .big);
+            } else {
+                try ptr.name.encode(writer);
+            }
+        },
     }
 }
 
@@ -222,7 +299,12 @@ fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
 
 /// Deinits our Name object (frees the name buffer)
 pub fn deinit(self: *Name) void {
-    self.allocator.free(self.name);
+    switch (self.name) {
+        .text => |txt| self.allocator.free(txt),
+        .ptr => |*ptr| {
+            if (ptr.prefix) |p| self.allocator.free(p);
+        },
+    }
 }
 
 //--------------------------------------------------
@@ -230,6 +312,16 @@ pub fn deinit(self: *Name) void {
 
 const testing = std.testing;
 const t = @import("testing.zig");
+
+fn expectEqualText(expected: []const u8, name: Name) !void {
+    switch (name.name) {
+        .text => |txt| {
+            try testing.expectEqualSlices(u8, expected, txt);
+            try testing.expectEqual(expected.len, txt.len);
+        },
+        .ptr => return error.InvalidEnumMode,
+    }
+}
 
 test "length decode" {
     var reader = Reader.fixed(t.data.labels.duckduckgo.encoded);
@@ -247,8 +339,7 @@ test "basic decode" {
     var name = try Name.decode(alloc, &reader);
     defer name.deinit();
 
-    try testing.expectEqualStrings(t.data.labels.duckduckgo.decoded, name.name);
-    try testing.expectEqual(t.data.labels.duckduckgo.decoded.len, name.name.len);
+    try expectEqualText(t.data.labels.duckduckgo.decoded, name);
     try testing.expectEqual(2, name.label_count); // "duckduckgo" and "com"
 }
 
@@ -290,7 +381,7 @@ test "decode of simple compression" {
         defer name.deinit();
 
         const expected = &[_]u8{ 0x1, 0x2, 0x3, 0x4, 0x5, '.', 0xaa, 0xbb, 0xcc, '.', 0x1a, 0x2b, 0x3c, 0x4d, '.' };
-        try testing.expectEqualSlices(u8, expected, name.name);
+        try expectEqualText(expected, name);
     }
 
     try testing.expectEqual(0x02ab, try reader.peekInt(u16, .big));
@@ -300,7 +391,7 @@ test "decode of simple compression" {
         defer name.deinit();
 
         const expected = &[_]u8{ 0xab, 0xcd, '.', 0x1, 0x2, 0x3, 0x4, 0x5, '.', 0xaa, 0xbb, 0xcc, '.', 0x1a, 0x2b, 0x3c, 0x4d, '.' };
-        try testing.expectEqualSlices(u8, expected, name.name);
+        try expectEqualText(expected, name);
     }
 }
 
@@ -322,7 +413,7 @@ test "basic encode" {
     //     .name = "duckduckgo.com."
     // };
 
-    try testing.expectEqualSlices(u8, "duckduckgo.com.", decoded_name.name);
+    try expectEqualText("duckduckgo.com.", decoded_name);
 
     try decoded_name.encode(&writer);
 
@@ -335,8 +426,7 @@ test "fromStr with root domain" {
     var name = try Name.fromStr(alloc, "example.com.");
     defer name.deinit();
 
-    try testing.expectEqualStrings("example.com.", name.name);
-    try testing.expectEqual(12, name.name.len);
+    try expectEqualText("example.com.", name);
     try testing.expectEqual(2, name.label_count); // "example" and "com"
 }
 
@@ -346,7 +436,49 @@ test "fromStr without root domain" {
     var name = try Name.fromStr(alloc, "example.com");
     defer name.deinit();
 
-    try testing.expectEqualStrings("example.com.", name.name);
-    try testing.expectEqual(12, name.name.len);
+    try expectEqualText("example.com.", name);
     try testing.expectEqual(2, name.label_count); // "example" and "com"
+}
+
+test "pointer encode, no prefix" {
+    const alloc = testing.allocator;
+
+    var target = try Name.fromStr(alloc, "example.com.");
+    defer target.deinit();
+
+    var pointer = try Name.fromPtr(alloc, null, &target);
+    defer pointer.deinit();
+
+    var encode_buf = std.mem.zeroes([512]u8);
+    var writer = Writer.fixed(&encode_buf);
+
+    try writer.writeInt(u16, 0xfb3c, .big);
+
+    try target.encode(&writer);
+    try pointer.encode(&writer);
+
+    const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0xc0, 0x02 };
+    try testing.expectEqualSlices(u8, encoded, writer.buffered());
+}
+
+test "pointer encode, prefix" {
+    const alloc = testing.allocator;
+
+    var target = try Name.fromStr(alloc, "example.com.");
+    defer target.deinit();
+
+    var pointer = try Name.fromPtr(alloc, "static.site.", &target);
+    defer pointer.deinit();
+
+    var encode_buf = std.mem.zeroes([512]u8);
+    var writer = Writer.fixed(&encode_buf);
+
+    try writer.writeInt(u16, 0xfb3c, .big);
+    try target.encode(&writer);
+
+    try writer.writeInt(u16, 0x9876, .big);
+    try pointer.encode(&writer);
+
+    const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0x98, 0x76, 6, 's', 't', 'a', 't', 'i', 'c', 4, 's', 'i', 't', 'e', 0xC0, 0x02 };
+    try testing.expectEqualSlices(u8, encoded, writer.buffered());
 }

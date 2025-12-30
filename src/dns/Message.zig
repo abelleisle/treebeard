@@ -132,10 +132,10 @@ pub fn deinit(self: *Message) void {
 
 pub fn encode(self: *const Message, writer: *Writer) !void {
     try self.header.encode(writer);
-    for (self.questions.items) |q| {
+    for (self.questions.items) |*q| {
         try q.encode(writer);
     }
-    for (self.answers.items) |a| {
+    for (self.answers.items) |*a| {
         try a.encode(writer);
     }
 }

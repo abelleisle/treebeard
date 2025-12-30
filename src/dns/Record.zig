@@ -158,7 +158,7 @@ pub fn decode(allocator: Allocator, reader: *Reader) !Record {
 }
 
 /// Encode the Record following the DNS encoding spec
-pub fn encode(self: *const Record, writer: *Writer) !void {
+pub fn encode(self: *Record, writer: *Writer) !void {
     try self.name.encode(writer);
     try self.type.encode(writer);
     try self.class.encode(writer);
@@ -198,7 +198,7 @@ pub fn encode(self: *const Record, writer: *Writer) !void {
 
 /// Print the record in a human-readable way
 pub fn display(self: *const Record) !void {
-    std.debug.print("{s} {d} {s} {s}  ", .{
+    std.debug.print("{f} {d} {s} {s}  ", .{
         self.name.name,
         self.ttl,
         @tagName(self.class),
@@ -223,16 +223,16 @@ pub fn display(self: *const Record) !void {
             }
         },
         .MX => |mx| {
-            std.debug.print("{d}  {s}", .{ mx.preference, mx.exchanger.name });
+            std.debug.print("{d}  {f}", .{ mx.preference, mx.exchanger.name });
         },
         .CNAME => |name| {
-            std.debug.print("{s}", .{name.name});
+            std.debug.print("{f}", .{name.name});
         },
         .NS => |name| {
-            std.debug.print("{s}", .{name.name});
+            std.debug.print("{f}", .{name.name});
         },
         .PTR => |name| {
-            std.debug.print("{s}", .{name.name});
+            std.debug.print("{f}", .{name.name});
         },
         .TXT => |txt| {
             std.debug.print("{s}", .{txt});
