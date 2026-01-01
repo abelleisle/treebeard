@@ -11,6 +11,12 @@ const Allocator = std.mem.Allocator;
 //--------------------------------------------------
 // DNS Name Type
 
+const RootLabel = Label{
+    .body = .root,
+    .next = null,
+    .prev = null,
+};
+
 const Name = @This();
 
 const MAX_NAME_BUFFER = 255; // Max buffer length
@@ -19,9 +25,24 @@ const MAX_LABEL_LENGTH: u8 = 63; // Max length of single label
 
 allocator: Allocator,
 
-name: NameData,
+front: *Label,
+back: *Label,
+
+// name: NameData,
 label_count: usize,
 encode_loc: ?u14 = null,
+
+const LabelBody = union(enum) {
+    root,
+    text: []const u8,
+    ptr: *Name,
+};
+
+const Label = struct {
+    body: LabelBody,
+    next: ?*Label,
+    prev: ?*Label,
+};
 
 const NameData = union(enum) {
     text: []u8,
@@ -54,32 +75,53 @@ const LabelHeader = packed struct(u8) {
 
 /// Create an encoded DNS name from human readable string
 pub fn fromStr(allocator: Allocator, domain: []const u8) !Name {
-    const has_root = domain.len > 0 and domain[domain.len - 1] == '.';
-    const final_len = domain.len + @intFromBool(!has_root);
-
-    if (final_len > MAX_NAME_LENGTH) {
-        return error.NameTooLong;
-    }
-
-    const buf = try allocator.alloc(u8, final_len);
-    @memcpy(buf[0..domain.len], domain);
-
-    if (!has_root) {
-        buf[domain.len] = '.';
-    }
+    var front: ?*Label = null;
+    var back: ?*Label = null;
 
     // Count labels (excluding empty root label)
     var count: usize = 0;
-    var iter = std.mem.splitScalar(u8, buf, '.');
+    var iter = std.mem.splitScalar(u8, domain, '.');
     while (iter.next()) |label| {
         if (label.len > 0) {
+            // We're on the first label of the name
+            if (front == null) {
+                front = try allocator.create(Label);
+                back = front;
+
+                front.?.* = Label{
+                    .body = .{ .text = label },
+                    .next = null,
+                    .prev = null,
+                };
+                // We're on following labels
+            } else {
+                const end = try allocator.create(Label);
+                end.* = Label{
+                    .body = .{ .text = label },
+                    .next = null,
+                    .prev = back.?,
+                };
+                back.?.next = end;
+                back.?.* = end;
+            }
             count += 1;
         }
     }
 
+    // Add root label
+    const end = try allocator.create(Label);
+    end.* = Label{
+        .body = .root,
+        .next = null,
+        .prev = back.?,
+    };
+    back.?.next = end;
+    back.?.* = end;
+
     return Name{
         .allocator = allocator,
-        .name = .{ .text = buf },
+        .front = front,
+        .back = back,
         .label_count = count,
     };
 }
