@@ -324,7 +324,10 @@ test "qname parsing" {
     try testing.expectEqual(2, qname.label_count);
 
     // Make sure we parsed the correct name
-    try testing.expectEqualStrings("duckduckgo.com.", qname.name);
+    switch (qname.name) {
+        .text => |name| try testing.expectEqualStrings("duckduckgo.com.", name),
+        else => return error.InvalidName,
+    }
 }
 
 test "message parse" {
