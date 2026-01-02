@@ -139,3 +139,11 @@ fn printHex(data: []const u8) void {
     }
     std.debug.print("\n", .{});
 }
+
+//--------------------------------------------------
+// Test references
+// This ensures all tests in these files are run when executing `zig build test`
+
+test {
+    _ = @import("treebeard");
+}

@@ -53,4 +53,5 @@ test {
     _ = @import("dns/Question.zig");
     _ = @import("dns/Record.zig");
     _ = @import("dns/codes.zig");
+    _ = @import("pool.zig");
 }
