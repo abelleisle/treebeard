@@ -4,6 +4,7 @@ const std = @import("std");
 //--------------------------------------------------
 // DNS Helpers
 const treebeard = @import("treebeard");
+const udp = @import("transport/udp.zig");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -13,21 +14,23 @@ pub fn main() !void {
     var pool = try treebeard.DNSMemory.init();
     defer pool.deinit();
 
-    const domain = if (args.len > 1) args[1] else "bitcicle.com";
-    std.debug.print("Querying DNS records for: {s}\n", .{domain});
+    try udp.recv_loop(&pool);
 
-    inline for (.{
-        treebeard.Type.A,
-        treebeard.Type.AAAA,
-        treebeard.Type.MX,
-        treebeard.Type.TXT,
-    }) |rtype| {
-        const name = @tagName(rtype);
-        std.debug.print("\n=== {s} Records ===\n", .{name});
-        queryDNS(&pool, domain, rtype) catch |err| {
-            std.debug.print("Query failed: {}\n", .{err});
-        };
-    }
+    // const domain = if (args.len > 1) args[1] else "bitcicle.com";
+    // std.debug.print("Querying DNS records for: {s}\n", .{domain});
+    //
+    // inline for (.{
+    //     treebeard.Type.A,
+    //     treebeard.Type.AAAA,
+    //     treebeard.Type.MX,
+    //     treebeard.Type.TXT,
+    // }) |rtype| {
+    //     const name = @tagName(rtype);
+    //     std.debug.print("\n=== {s} Records ===\n", .{name});
+    //     queryDNS(&pool, domain, rtype) catch |err| {
+    //         std.debug.print("Query failed: {}\n", .{err});
+    //     };
+    // }
 }
 
 fn queryDNS(memory: *treebeard.DNSMemory, domain: []const u8, record: treebeard.Type) !void {

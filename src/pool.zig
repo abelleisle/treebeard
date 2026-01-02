@@ -20,7 +20,6 @@ const heap = std.heap;
 const ArenaAllocator = heap.ArenaAllocator;
 
 // DNS
-const transport = @import("transport/memory.zig");
 const Label = @import("dns/Name.zig").Label;
 
 //--------------------------------------------------

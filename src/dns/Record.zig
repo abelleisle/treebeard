@@ -39,7 +39,7 @@ ttl: u32,
 rdata: RData,
 
 /// Parsed RDATA based on record type
-const RData = union(enum) {
+pub const RData = union(enum) {
     A: [4]u8,
     AAAA: [16]u8,
     MX: struct {
