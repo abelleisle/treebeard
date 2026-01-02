@@ -1,9 +1,8 @@
 const std = @import("std");
 
-// IO
-const io = std.io;
-const Reader = io.Reader;
-const Writer = io.Writer;
+const treebeard = @import("treebeard");
+const DNSReader = treebeard.DNSReader;
+const DNSWriter = treebeard.DNSWriter;
 
 //--------------------------------------------------
 // Header Types
@@ -112,16 +111,16 @@ pub const Type = enum(u16) {
     SRV = 33,
 
     /// Decode Record type from encoded DNS format
-    pub fn decode(reader: *Reader) !Type {
-        const typeInt: u16 = reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
+    pub fn decode(reader: *DNSReader) !Type {
+        const typeInt: u16 = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
         const typeEnum: Type = std.meta.intToEnum(Type, typeInt) catch return error.InvalidType;
         return typeEnum;
     }
 
     /// Encodes Record type to encoded DNS format
-    pub fn encode(self: Type, writer: *Writer) !void {
+    pub fn encode(self: Type, writer: *DNSWriter) !void {
         const typeInt: u16 = @intFromEnum(self);
-        try writer.writeInt(u16, typeInt, .big);
+        try writer.writer.writeInt(u16, typeInt, .big);
     }
 };
 
@@ -154,16 +153,16 @@ pub const Class = enum(u16) {
     HS = 4,
 
     /// Decode Record class from encoded DNS format
-    pub fn decode(reader: *Reader) !Class {
-        const classInt: u16 = reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
+    pub fn decode(reader: *DNSReader) !Class {
+        const classInt: u16 = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
         const classEnum: Class = std.meta.intToEnum(Class, classInt) catch return error.InvalidClass;
         return classEnum;
     }
 
     /// Encodes Record class to encoded DNS format
-    pub fn encode(self: Class, writer: *Writer) !void {
+    pub fn encode(self: Class, writer: *DNSWriter) !void {
         const classInt: u16 = @intFromEnum(self);
-        try writer.writeInt(u16, classInt, .big);
+        try writer.writer.writeInt(u16, classInt, .big);
     }
 };
 

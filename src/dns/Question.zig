@@ -1,10 +1,5 @@
 const std = @import("std");
 
-// IO
-const io = std.io;
-const Writer = io.Writer;
-const Reader = io.Reader;
-
 // Memory
 const Allocator = std.mem.Allocator;
 
@@ -14,13 +9,17 @@ const Type = codes.Type;
 const Class = codes.Class;
 const Name = @import("Name.zig");
 
+const DNSMemory = @import("../pool.zig").DNSMemory;
+const DNSReader = @import("../pool.zig").DNSReader;
+const DNSWriter = @import("../pool.zig").DNSWriter;
+
 //--------------------------------------------------
 // DNS Question
 
 /// DNS question (query)
 const Question = @This();
 
-allocator: Allocator,
+memory: *DNSMemory,
 
 /// Name of the requested resource
 name: Name,
@@ -31,16 +30,16 @@ type: Type,
 /// Class code
 class: Class,
 
-pub fn decode(allocator: Allocator, reader: *Reader) !Question {
-    var name = try Name.decode(allocator, reader);
+pub fn decode(reader: *DNSReader) !Question {
+    var name = try Name.decode(reader);
     errdefer name.deinit();
 
     // TODO: make sure type and class are valid values
-    const typeRR: codes.Type = try std.meta.intToEnum(codes.Type, try reader.takeInt(u16, .big));
-    const classRR: codes.Class = try std.meta.intToEnum(codes.Class, try reader.takeInt(u16, .big));
+    const typeRR: codes.Type = try std.meta.intToEnum(codes.Type, try reader.reader.takeInt(u16, .big));
+    const classRR: codes.Class = try std.meta.intToEnum(codes.Class, try reader.reader.takeInt(u16, .big));
 
     return Question{
-        .allocator = allocator,
+        .memory = reader.memory,
         .name = name,
         .type = typeRR,
         .class = classRR,
@@ -51,8 +50,8 @@ pub fn deinit(self: *Question) void {
     self.name.deinit();
 }
 
-pub fn encode(self: *Question, writer: *Writer) !void {
+pub fn encode(self: *Question, writer: *DNSWriter) !void {
     try self.name.encode(writer);
-    try writer.writeInt(u16, @intFromEnum(self.type), .big);
-    try writer.writeInt(u16, @intFromEnum(self.class), .big);
+    try writer.writer.writeInt(u16, @intFromEnum(self.type), .big);
+    try writer.writer.writeInt(u16, @intFromEnum(self.class), .big);
 }

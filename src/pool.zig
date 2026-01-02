@@ -21,17 +21,18 @@ const ArenaAllocator = heap.ArenaAllocator;
 
 // DNS
 const transport = @import("transport/memory.zig");
+const Label = @import("dns/Name.zig").Label;
 
 //--------------------------------------------------
 // Types
 const UDPMessageBuffer = [512]u8;
-const LabelPointer = []const u8;
 
 const UDPBufPool = std.heap.MemoryPool(UDPMessageBuffer);
-const LabelBufPool = std.heap.MemoryPool(LabelPointer);
+const LabelBufPool = std.heap.MemoryPool(Label);
 
 const PoolType = union(enum) {
     UDP,
+    fixed: []const u8,
 };
 
 //--------------------------------------------------
@@ -87,14 +88,27 @@ const LabelPool = struct {
         return LabelPool{ .pool = LabelBufPool.init(allocator) };
     }
 
+    pub fn borrow(self: *LabelPool) !*Label {
+        return try self.pool.create();
+    }
+
+    pub fn giveback(self: *LabelPool, label: *Label) void {
+        self.pool.destroy(label);
+    }
+
     pub fn deinit(self: *LabelPool) void {
         self.pool.deinit();
     }
 };
 
+const PreheatOptions = struct {
+    udp: u32,
+    labels: u32,
+};
+
 /// Master DNS pool.
 /// This is used to handle all "child" pools, a memory context of sorts.
-const DNSMemory = struct {
+pub const DNSMemory = struct {
     // Global allocator for general allocations
     arena: ArenaAllocator,
 
@@ -104,14 +118,23 @@ const DNSMemory = struct {
         label: LabelPool,
     },
 
+    preheated: bool,
+
     pub fn init() !DNSMemory {
-        // Use page_allocator for arena backing
-        var arena = ArenaAllocator.init(std.heap.page_allocator);
+        const builtin = @import("builtin");
+
+        // Use testing allocator in test mode, page_allocator otherwise
+        const base_allocator = if (builtin.is_test)
+            std.testing.allocator
+        else
+            std.heap.page_allocator;
+
+        var arena = ArenaAllocator.init(base_allocator);
         errdefer arena.deinit();
 
         // Pools need an allocator that supports individual frees,
-        // so use page_allocator directly
-        const pool_allocator = std.heap.page_allocator;
+        // so use the same base allocator
+        const pool_allocator = base_allocator;
 
         return DNSMemory{
             .arena = arena,
@@ -119,6 +142,7 @@ const DNSMemory = struct {
                 .udp = UDPMessagePool.init(pool_allocator),
                 .label = LabelPool.init(pool_allocator),
             },
+            .preheated = false,
         };
     }
 
@@ -131,71 +155,126 @@ const DNSMemory = struct {
         self.arena.deinit();
     }
 
-    pub fn getReader(self: *DNSMemory, readerType: PoolType) !DNSReader {
+    pub fn preheat(self: *DNSMemory, options: PreheatOptions) !void {
+        if (self.preheated) {
+            return error.AlreadyPreheated;
+        }
+        self.preheated = true;
+
+        try self.pools.udp.pool.preheat(options.udp);
+        try self.pools.label.pool.preheat(options.labels);
+    }
+
+    pub inline fn alloc(self: *DNSMemory) Allocator {
+        return self.arena.allocator();
+    }
+
+    pub fn getReader(self: *DNSMemory, readerType: ReaderType) !DNSReader {
         switch (readerType) {
-            .UDP => {
+            .udp => {
                 const buf = try self.pools.udp.pool.create();
                 return DNSReader{
                     .reader = Reader.fixed(buf),
-                    .readerType = ReaderType{ .udp = buf },
+                    .readerType = ReaderInnerType{ .udp = buf },
+                    .memory = self,
+                };
+            },
+            .fixed => |buf| {
+                return DNSReader{
+                    .reader = Reader.fixed(buf),
+                    .readerType = ReaderInnerType{ .fixed = buf },
+                    .memory = self,
                 };
             },
         }
     }
 
-    /// Return (destroy) the allocated reader.
-    /// Note: passing `reader` transfers ownership back to our DNSMemory
-    /// object.
-    pub fn returnReader(self: *DNSMemory, reader: *DNSReader) void {
-        switch (reader.readerType) {
-            .udp => |buf| self.pools.udp.pool.destroy(buf),
-            .fixed => |buf| self.arena.allocator().free(buf),
-        }
-    }
-
-    pub fn getWriter(self: *DNSMemory, writerType: PoolType) !DNSWriter {
+    pub fn getWriter(self: *DNSMemory, writerType: WriterType) !DNSWriter {
         switch (writerType) {
-            .UDP => {
+            .udp => {
                 const buf = try self.pools.udp.pool.create();
                 return DNSWriter{
                     .writer = Writer.fixed(buf),
-                    .writerType = WriterType{ .udp = buf },
+                    .writerType = WriterInnerType{ .udp = buf },
+                    .memory = self,
                 };
             },
-        }
-    }
-
-    /// Return (destroy) the allocated writer.
-    /// Note: passing `writer` transfers ownership back to our DNSMemory
-    /// object.
-    pub fn returnWriter(self: *DNSMemory, writer: *DNSWriter) void {
-        switch (writer.writerType) {
-            .udp => |buf| self.pools.udp.pool.destroy(buf),
-            .fixed => |buf| self.arena.allocator().free(buf),
-            .allocating => |*alloc| alloc.deinit(),
+            .fixed => |buf| {
+                return DNSWriter{
+                    .writer = Writer.fixed(buf),
+                    .writerType = WriterInnerType{ .fixed = buf },
+                    .memory = self,
+                };
+            },
+            .allocating => {
+                const allocator = try Writer.Allocating.initCapacity(self.alloc(), 4096);
+                return DNSWriter{
+                    .writer = allocator.writer,
+                    .writerType = WriterInnerType{ .allocating = allocator },
+                    .memory = self,
+                };
+            },
         }
     }
 };
 
 const ReaderType = union(enum) {
-    fixed: []u8,
+    fixed: []const u8,
+    udp,
+};
+
+const ReaderInnerType = union(enum) {
+    fixed: []const u8,
     udp: *align(8) UDPMessageBuffer,
 };
 
+pub const DNSReader = struct {
+    reader: Reader,
+    readerType: ReaderInnerType,
+
+    memory: *DNSMemory,
+
+    /// Return (destroy) the allocated reader.
+    /// Note: passing `reader` transfers ownership back to our DNSMemory
+    /// object.
+    pub fn deinit(self: *DNSReader) void {
+        switch (self.readerType) {
+            .udp => |buf| self.memory.pools.udp.pool.destroy(buf),
+            // .fixed => |buf| self.memory.arena.allocator().free(buf),
+            .fixed => {},
+        }
+    }
+};
+
 const WriterType = union(enum) {
+    fixed: []u8,
+    udp,
+    allocating,
+};
+
+const WriterInnerType = union(enum) {
     fixed: []u8,
     udp: *align(8) UDPMessageBuffer,
     allocating: Writer.Allocating,
 };
 
-pub const DNSReader = struct {
-    reader: Reader,
-    readerType: ReaderType,
-};
-
 pub const DNSWriter = struct {
     writer: Writer,
-    writerType: WriterType,
+    writerType: WriterInnerType,
+
+    memory: *DNSMemory,
+
+    /// Return (destroy) the allocated writer.
+    /// Note: passing `writer` transfers ownership back to our DNSMemory
+    /// object.
+    pub fn deinit(self: *DNSWriter) void {
+        switch (self.writerType) {
+            .udp => |buf| self.memory.pools.udp.pool.destroy(buf),
+            // .fixed => |buf| self.memory.arena.allocator().free(buf),
+            .fixed => {},
+            .allocating => |*alloc| alloc.deinit(),
+        }
+    }
 };
 
 //--------------------------------------------------
@@ -267,17 +346,17 @@ test "udp reader and writer" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var reader = try pool.getReader(.UDP);
-    defer pool.returnReader(&reader);
+    var reader = try pool.getReader(.udp);
+    defer reader.deinit();
 
     // This is pretty hacky and I don't love it
     @memcpy(reader.reader.buffer[0..t.data.query.duckduckgo_simple.len], t.data.query.duckduckgo_simple);
 
-    var message = try Message.decode(pool.arena.allocator(), &reader.reader);
+    var message = try Message.decode(&reader);
     defer message.deinit();
 
-    var writer = try pool.getWriter(.UDP);
-    defer pool.returnWriter(&writer);
+    var writer = try pool.getWriter(.udp);
+    defer writer.deinit();
 
-    try message.encode(&writer.writer);
+    try message.encode(&writer);
 }

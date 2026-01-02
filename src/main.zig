@@ -8,12 +8,15 @@ const Reader = io.Reader;
 
 //--------------------------------------------------
 // DNS Helpers
-const treebeard = @import("root.zig");
+const treebeard = @import("treebeard");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
+
+    var pool = try treebeard.DNSMemory.init();
+    defer pool.deinit();
 
     const domain = if (args.len > 1) args[1] else "bitcicle.com";
     std.debug.print("Querying DNS records for: {s}\n", .{domain});
@@ -26,52 +29,49 @@ pub fn main() !void {
     }) |rtype| {
         const name = @tagName(rtype);
         std.debug.print("\n=== {s} Records ===\n", .{name});
-        queryDNS(domain, rtype) catch |err| {
+        queryDNS(&pool, domain, rtype) catch |err| {
             std.debug.print("Query failed: {}\n", .{err});
         };
     }
 }
 
-fn queryDNS(domain: []const u8, record: treebeard.Type) !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var message = try treebeard.buildQuery(allocator, domain, record);
+fn queryDNS(memory: *treebeard.DNSMemory, domain: []const u8, record: treebeard.Type) !void {
+    var message = try treebeard.buildQuery(memory, domain, record);
     defer message.deinit();
 
     // Try UDP first
-    queryDNS_UDP(allocator, &message) catch |err| {
+    queryDNS_UDP(memory, &message) catch |err| {
         if (err == error.TruncatedMessage) {
             std.debug.print("Message truncated, retrying with TCP...\n", .{});
-            try queryDNS_TCP(allocator, &message);
+            try queryDNS_TCP(memory, &message);
         } else {
             return err;
         }
     };
 }
 
-fn queryDNS_UDP(allocator: std.mem.Allocator, message: *treebeard.Message) !void {
-    var buf = std.mem.zeroes([512]u8);
-    var writer = Writer.fixed(&buf);
+fn queryDNS_UDP(memory: *treebeard.DNSMemory, message: *treebeard.Message) !void {
+    var writer = try memory.getWriter(.udp);
+    defer writer.deinit();
 
     try message.encode(&writer);
 
     // Get the written slice
-    const written_data = writer.buffered();
+    const written_data = writer.writer.buffered();
     // Send over UDP
     const address = try std.net.Address.parseIp("127.0.0.1", 53);
     const socket = try std.posix.socket(address.any.family, std.posix.SOCK.DGRAM, std.posix.IPPROTO.UDP);
     defer std.posix.close(socket);
 
-    var response = std.mem.zeroes([512]u8);
+    var reader = try memory.getReader(.udp);
+    defer reader.deinit();
+
     _ = try std.posix.sendto(socket, written_data, 0, &address.any, address.getOsSockLen());
-    const recv_len = try std.posix.recv(socket, &response, 0);
+    const recv_len = try std.posix.recv(socket, reader.reader.buffer, 0);
 
-    printHex(response[0..recv_len]);
+    printHex(reader.reader.buffer[0..recv_len]);
 
-    var reader = Reader.fixed(response[0..recv_len]);
-    var msg = try treebeard.Message.decode(allocator, &reader);
+    var msg = try treebeard.Message.decode(&reader);
     defer msg.deinit();
 
     for (msg.answers.items) |a| {
@@ -79,16 +79,17 @@ fn queryDNS_UDP(allocator: std.mem.Allocator, message: *treebeard.Message) !void
     }
 }
 
-fn queryDNS_TCP(allocator: std.mem.Allocator, message: *treebeard.Message) !void {
+fn queryDNS_TCP(memory: *treebeard.DNSMemory, message: *treebeard.Message) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 53);
     const stream = try std.net.tcpConnectToAddress(address);
     defer stream.close();
 
     // Encode message to buffer first (need to know length for TCP)
-    var msg_buf = std.mem.zeroes([4096]u8);
-    var writer = Writer.fixed(&msg_buf);
+    var writer = try memory.getWriter(.allocating);
+    defer writer.deinit();
+
     try message.encode(&writer);
-    const message_data = writer.buffered();
+    const message_data = writer.writer.buffered();
 
     // DNS over TCP requires a 2-byte length prefix
     // Build the complete TCP message: [2-byte length][DNS message]
@@ -108,8 +109,8 @@ fn queryDNS_TCP(allocator: std.mem.Allocator, message: *treebeard.Message) !void
     const response_len = try len_reader.takeInt(u16, .big);
 
     // Read the actual DNS message
-    const response = try allocator.alloc(u8, response_len);
-    defer allocator.free(response);
+    const response = try memory.alloc().alloc(u8, response_len);
+    defer memory.alloc().free(response);
     var total_read: usize = 0;
     while (total_read < response_len) {
         const n = try stream.read(response[total_read..]);
@@ -119,8 +120,9 @@ fn queryDNS_TCP(allocator: std.mem.Allocator, message: *treebeard.Message) !void
 
     printHex(response);
 
-    var reader = Reader.fixed(response);
-    var msg = try treebeard.Message.decode(allocator, &reader);
+    var reader = try memory.getReader(.{ .fixed = response });
+    defer reader.deinit();
+    var msg = try treebeard.Message.decode(&reader);
     defer msg.deinit();
 
     for (msg.answers.items) |a| {
