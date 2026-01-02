@@ -173,9 +173,39 @@ pub fn fromStr(allocator: Allocator, domain: []const u8) !Name {
 
 pub fn fromPtr(allocator: Allocator, prefix: ?[]const u8, target: *Name) !Name {
     if (prefix) |pfx| {
-        var name = try fromStr(allocator, pfx);
-        try name.labels.push(allocator, .{ .ptr = target });
-        name.total_length += target.total_length;
+        var labels: ?LabelList = null;
+
+        // Count labels (excluding empty root label)
+        var length: usize = target.total_length;
+        var count: usize = target.label_count;
+        var iter = std.mem.splitScalar(u8, pfx, '.');
+        while (iter.next()) |label| {
+            if (label.len > 0) {
+                // We're on following labels
+                if (labels) |*l| {
+                    try l.push(allocator, .{ .text = label });
+                    // We're on the first label of the name
+                } else {
+                    labels = try LabelList.init(allocator, .{ .text = label });
+                }
+                count += 1;
+                length += label.len;
+            }
+        }
+
+        if (labels) |*l| {
+            try l.push(allocator, .{ .ptr = target });
+        } else {
+            labels = try LabelList.init(allocator, .{ .ptr = target });
+        }
+
+        const name = Name{
+            .allocator = allocator,
+            .labels = labels.?, // We know label exists since we just created it
+            .label_count = count,
+            .total_length = length,
+        };
+
         return name;
     } else {
         const labels = try LabelList.init(allocator, .{ .ptr = target });
@@ -272,6 +302,22 @@ pub fn encode(self: *Name, writer: *Writer) !void {
     //         }
     //     },
     // }
+}
+
+pub fn format(self: *const Name, writer: anytype) !void {
+    var iter = self.labels.iter();
+    var first = true;
+    while (iter.next()) |label| {
+        switch (label.*) {
+            // TODO we may not want to print anything here.
+            // Technically, if our pointed to label is also a root, it
+            // will print '.' as well even though it isn't first label.
+            .root => if (first) try writer.print(".", .{}),
+            .text => |text| try writer.print("{s}.", .{text}),
+            .ptr => |ptr| try writer.print("{f}", .{ptr}),
+        }
+        first = false;
+    }
 }
 
 /// Info about the Name.
@@ -437,13 +483,11 @@ const testing = std.testing;
 const t = @import("testing.zig");
 
 fn expectEqualText(expected: []const u8, name: Name) !void {
-    switch (name.name) {
-        .text => |txt| {
-            try testing.expectEqualSlices(u8, expected, txt);
-            try testing.expectEqual(expected.len, txt.len);
-        },
-        .ptr => return error.InvalidEnumMode,
-    }
+    const buf = try std.fmt.allocPrint(testing.allocator, "{f}", .{name});
+    defer testing.allocator.free(buf);
+
+    try testing.expectEqualSlices(u8, expected, buf);
+    try testing.expectEqual(expected.len, buf.len);
 }
 
 test "length decode" {
