@@ -166,23 +166,28 @@ pub fn encode(self: *Record, writer: *DNSWriter) !void {
 
     switch (self.rdata) {
         .A => |*ip| {
+            try writer.writer.writeInt(u16, ip.len, .big);
             const written = try writer.writer.write(ip);
             if (written != ip.len) {
                 return error.NotEnoughBytes;
             }
         },
         .AAAA => |*ip| {
+            try writer.writer.writeInt(u16, ip.len, .big);
             const written = try writer.writer.write(ip);
             if (written != ip.len) {
                 return error.NotEnoughBytes;
             }
         },
+        // TODO encode length
         .CNAME, .NS, .PTR => |*name| try name.encode(writer),
         .MX => |*mx| {
+            // TODO encode length
             try writer.writer.writeInt(u16, mx.preference, .big);
             try mx.exchanger.encode(writer);
         },
         .TXT => |txt| {
+            // TODO encode length
             const written = try writer.writer.write(txt);
             if (written != txt.len) {
                 return error.NotEnoughBytes;

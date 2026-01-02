@@ -30,17 +30,16 @@ pub fn recv_loop(memory: *DNSMemory) !void {
 
     try std.posix.bind(sock, @ptrCast(&receiver.any), receiver.in.getOsSockLen());
 
-    var reader = try memory.getReader(.udp);
-    defer reader.deinit();
-    const buf = reader.reader.buffer;
-
     // var expected_seq: u32 = 0;
 
     var addr: std.posix.sockaddr = undefined;
     var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr);
 
     while (true) {
-        _ = try reader.reader.discard(.nothing);
+        var reader = try memory.getReader(.udp);
+        defer reader.deinit();
+        const buf = reader.reader.buffer;
+
         const ret = try posix.recvfrom(sock, @constCast(buf), 0, &addr, &addr_len);
         if (ret == 0) {
             // This shouldn't be possible since the socket is blocking, but lets just be safe.
