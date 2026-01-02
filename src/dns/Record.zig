@@ -199,7 +199,7 @@ pub fn encode(self: *Record, writer: *Writer) !void {
 /// Print the record in a human-readable way
 pub fn display(self: *const Record) !void {
     std.debug.print("{f} {d} {s} {s}  ", .{
-        self.name.name,
+        self.name,
         self.ttl,
         @tagName(self.class),
         @tagName(self.type),
@@ -223,16 +223,16 @@ pub fn display(self: *const Record) !void {
             }
         },
         .MX => |mx| {
-            std.debug.print("{d}  {f}", .{ mx.preference, mx.exchanger.name });
+            std.debug.print("{d}  {f}", .{ mx.preference, mx.exchanger });
         },
         .CNAME => |name| {
-            std.debug.print("{f}", .{name.name});
+            std.debug.print("{f}", .{name});
         },
         .NS => |name| {
-            std.debug.print("{f}", .{name.name});
+            std.debug.print("{f}", .{name});
         },
         .PTR => |name| {
-            std.debug.print("{f}", .{name.name});
+            std.debug.print("{f}", .{name});
         },
         .TXT => |txt| {
             std.debug.print("{s}", .{txt});
