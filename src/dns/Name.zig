@@ -11,12 +11,6 @@ const Allocator = std.mem.Allocator;
 //--------------------------------------------------
 // DNS Name Type
 
-const RootLabel = Label{
-    .body = .root,
-    .next = null,
-    .prev = null,
-};
-
 const Name = @This();
 
 const MAX_NAME_BUFFER = 255; // Max buffer length
@@ -25,11 +19,11 @@ const MAX_LABEL_LENGTH: u8 = 63; // Max length of single label
 
 allocator: Allocator,
 
-front: *Label,
-back: *Label,
+labels: LabelList,
 
-// name: NameData,
 label_count: usize,
+total_length: usize,
+
 encode_loc: ?u14 = null,
 
 const LabelBody = union(enum) {
@@ -42,6 +36,73 @@ const Label = struct {
     body: LabelBody,
     next: ?*Label,
     prev: ?*Label,
+};
+
+const LabelList = struct {
+    front: *Label,
+    back: *Label,
+
+    pub fn init(allocator: Allocator, body: LabelBody) !LabelList {
+        const front = try allocator.create(Label);
+        front.* = Label{
+            .body = body,
+            .next = null,
+            .prev = null,
+        };
+
+        return LabelList{
+            .front = front,
+            .back = front,
+        };
+    }
+
+    pub fn deinit(self: *LabelList, allocator: Allocator) void {
+        var i: ?*Label = self.front;
+        while (i) |label| {
+            i = label.next;
+            allocator.destroy(label);
+        }
+    }
+
+    pub fn push(self: *LabelList, allocator: Allocator, body: LabelBody) !void {
+        const end = try allocator.create(Label);
+        end.* = Label{
+            .body = body,
+            .next = null,
+            .prev = self.back,
+        };
+        self.back.next = end;
+        self.back = end;
+    }
+
+    pub fn iter(self: *const LabelList) LabelListIterator {
+        return LabelListIterator{
+            .ptr = null,
+            .list = self,
+        };
+    }
+
+    pub const LabelListIterator = struct {
+        /// What node are we pointing to? If the value is none,
+        /// we haven't started iterating yet.
+        ptr: ?*Label,
+        list: *const LabelList,
+
+        pub fn next(self: *LabelListIterator) ?*LabelBody {
+            // We've started iterating
+            if (self.ptr) |p| {
+                if (p.next) |nx| {
+                    self.ptr = nx;
+                    return &nx.body;
+                } else {
+                    return null;
+                }
+            } else {
+                self.ptr = self.list.front;
+                return &self.list.front.body;
+            }
+        }
+    };
 };
 
 const NameData = union(enum) {
@@ -75,77 +136,54 @@ const LabelHeader = packed struct(u8) {
 
 /// Create an encoded DNS name from human readable string
 pub fn fromStr(allocator: Allocator, domain: []const u8) !Name {
-    var front: ?*Label = null;
-    var back: ?*Label = null;
+    var labels: ?LabelList = null;
 
     // Count labels (excluding empty root label)
+    var length: usize = 0;
     var count: usize = 0;
     var iter = std.mem.splitScalar(u8, domain, '.');
     while (iter.next()) |label| {
         if (label.len > 0) {
-            // We're on the first label of the name
-            if (front == null) {
-                front = try allocator.create(Label);
-                back = front;
-
-                front.?.* = Label{
-                    .body = .{ .text = label },
-                    .next = null,
-                    .prev = null,
-                };
-                // We're on following labels
+            // We're on following labels
+            if (labels) |*l| {
+                try l.push(allocator, .{ .text = label });
+                // We're on the first label of the name
             } else {
-                const end = try allocator.create(Label);
-                end.* = Label{
-                    .body = .{ .text = label },
-                    .next = null,
-                    .prev = back.?,
-                };
-                back.?.next = end;
-                back.?.* = end;
+                labels = try LabelList.init(allocator, .{ .text = label });
             }
             count += 1;
+            length += label.len;
         }
     }
 
     // Add root label
-    const end = try allocator.create(Label);
-    end.* = Label{
-        .body = .root,
-        .next = null,
-        .prev = back.?,
-    };
-    back.?.next = end;
-    back.?.* = end;
+    if (labels) |*l| {
+        try l.push(allocator, .root);
+    } else {
+        labels = try LabelList.init(allocator, .root);
+    }
 
     return Name{
         .allocator = allocator,
-        .front = front,
-        .back = back,
+        .labels = labels.?, // We know label exists since we just created it
         .label_count = count,
+        .total_length = length,
     };
 }
 
 pub fn fromPtr(allocator: Allocator, prefix: ?[]const u8, target: *Name) !Name {
     if (prefix) |pfx| {
-        const name = try fromStr(allocator, pfx);
-        const buf: []u8 = brk: switch (name.name) {
-            .text => |txt| break :brk txt,
-            .ptr => return error.InvalidActiveEnum,
-        };
-        return Name{
-            .allocator = name.allocator,
-            .name = .{ .ptr = .{
-                .prefix = buf,
-                .name = target,
-            } },
-            .label_count = name.label_count + target.label_count,
-        };
+        var name = try fromStr(allocator, pfx);
+        try name.labels.push(allocator, .{ .ptr = target });
+        name.total_length += target.total_length;
+        return name;
     } else {
+        const labels = try LabelList.init(allocator, .{ .ptr = target });
         return Name{
             .allocator = allocator,
-            .name = .{ .ptr = .{ .prefix = null, .name = target } },
+            .labels = labels,
             .label_count = target.label_count,
+            .total_length = target.total_length,
         };
     }
 }
@@ -154,60 +192,86 @@ pub fn fromPtr(allocator: Allocator, prefix: ?[]const u8, target: *Name) !Name {
 pub fn decode(allocator: Allocator, reader: *Reader) !Name {
     const info = try getLengthFromBuffer(reader);
 
-    const buf = try allocator.alloc(u8, info.bytes);
-    errdefer allocator.free(buf);
+    // const buf = try allocator.alloc(u8, info.bytes);
+    // errdefer allocator.free(buf);
 
-    try getStrFromBuffer(reader, buf);
+    const labels = try getLabelsFromBuffer(allocator, reader);
 
     return Name{
         .allocator = allocator,
-        .name = .{ .text = buf },
+        .labels = labels,
         .label_count = info.label_count,
+        .total_length = info.bytes,
     };
 }
 
 /// Encodes the provided name following the DNS NAME encoding spec
 pub fn encode(self: *Name, writer: *Writer) !void {
-    switch (self.name) {
-        .text => |text| {
-            self.encode_loc = @intCast(writer.end);
-            var iter = std.mem.splitScalar(u8, text, '.');
-            while (iter.next()) |label| {
-                if (label.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
+    self.encode_loc = @intCast(writer.end);
 
-                try writer.writeInt(u8, @intCast(label.len), .big);
-                const written_len = try writer.write(label);
-                if (written_len != label.len) {
+    var iter = self.labels.iter();
+    while (iter.next()) |label| {
+        switch (label.*) {
+            .root => try writer.writeInt(u8, 0, .big),
+            .text => |l| {
+                if (l.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
+                try writer.writeInt(u8, @intCast(l.len), .big);
+                const written_len = try writer.write(l);
+                if (written_len != l.len) {
                     return error.NotEnoughBytes;
                 }
-            }
-        },
-        .ptr => |*ptr| {
-            self.encode_loc = @intCast(writer.end);
-            if (ptr.prefix) |prefix| {
-                // We don't want to write the root domain of a prefix
-
-                var iter = std.mem.splitScalar(u8, prefix, '.');
-                while (iter.next()) |label| {
-                    if (label.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
-                    if (label.len == 0) continue;
-
-                    try writer.writeInt(u8, @intCast(label.len), .big);
-                    const written_len = try writer.write(label);
-                    if (written_len != label.len) {
-                        return error.NotEnoughBytes;
-                    }
+            },
+            .ptr => |ptr| {
+                if (ptr.encode_loc) |loc| {
+                    const header: u16 = 0xC000 | @as(u16, @intCast(loc));
+                    try writer.writeInt(u16, header, .big);
+                } else {
+                    try ptr.encode(writer);
                 }
-            }
-
-            if (ptr.name.encode_loc) |loc| {
-                const header: u16 = 0xC000 | @as(u16, @intCast(loc));
-                try writer.writeInt(u16, header, .big);
-            } else {
-                try ptr.name.encode(writer);
-            }
-        },
+            },
+        }
     }
+
+    // switch (self.name) {
+    //     .text => |text| {
+    //         self.encode_loc = @intCast(writer.end);
+    //         var iter = std.mem.splitScalar(u8, text, '.');
+    //         while (iter.next()) |label| {
+    //             if (label.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
+    //
+    //             try writer.writeInt(u8, @intCast(label.len), .big);
+    //             const written_len = try writer.write(label);
+    //             if (written_len != label.len) {
+    //                 return error.NotEnoughBytes;
+    //             }
+    //         }
+    //     },
+    //     .ptr => |*ptr| {
+    //         self.encode_loc = @intCast(writer.end);
+    //         if (ptr.prefix) |prefix| {
+    //             // We don't want to write the root domain of a prefix
+    //
+    //             var iter = std.mem.splitScalar(u8, prefix, '.');
+    //             while (iter.next()) |label| {
+    //                 if (label.len > MAX_LABEL_LENGTH) return error.LabelTooLong;
+    //                 if (label.len == 0) continue;
+    //
+    //                 try writer.writeInt(u8, @intCast(label.len), .big);
+    //                 const written_len = try writer.write(label);
+    //                 if (written_len != label.len) {
+    //                     return error.NotEnoughBytes;
+    //                 }
+    //             }
+    //         }
+    //
+    //         if (ptr.name.encode_loc) |loc| {
+    //             const header: u16 = 0xC000 | @as(u16, @intCast(loc));
+    //             try writer.writeInt(u16, header, .big);
+    //         } else {
+    //             try ptr.name.encode(writer);
+    //         }
+    //     },
+    // }
 }
 
 /// Info about the Name.
@@ -268,7 +332,10 @@ fn getLengthFromBuffer(reader: *const Reader) !NameInfo {
 
 /// Get the human readable domain name from the encoded buffer.
 /// The resulting string will be placed in `out`.
-fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
+fn getLabelsFromBuffer(allocator: Allocator, reader: *Reader) !LabelList {
+    var labels: ?LabelList = null;
+    errdefer if (labels) |*l| l.deinit(allocator);
+
     const buffer = reader.buffer;
     const end = @min(buffer.len, reader.end);
 
@@ -291,14 +358,27 @@ fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
             // Standard label
             0b00 => {
                 const length = header.len;
+                // We hit the root label
                 if (length == 0) {
-                    return;
+                    if (labels) |*l| {
+                        try l.push(allocator, .root);
+                    } else {
+                        labels = try LabelList.init(allocator, .root);
+                    }
+                    return labels.?;
+                    // Individual label is too long (not really possible with our)
+                    // 6 bit length
                 } else if (length > 63) {
                     return error.LabelTooLong;
+                    // Normal label
                 } else {
-                    // Copy label data into output
-                    @memcpy(out[write_pos .. write_pos + length], buffer[parse_offset + 1 .. parse_offset + 1 + length]);
-                    out[write_pos + length] = '.';
+                    const buf = buffer[parse_offset + 1 .. parse_offset + 1 + length];
+                    const body: LabelBody = .{ .text = buf };
+                    if (labels) |*l| {
+                        try l.push(allocator, body);
+                    } else {
+                        labels = try LabelList.init(allocator, body);
+                    }
 
                     // Only take if we're still following a non-pointer name
                     if (parse_offset == reader_offset) {
@@ -341,12 +421,13 @@ fn getStrFromBuffer(reader: *Reader, out: []u8) !void {
 
 /// Deinits our Name object (frees the name buffer)
 pub fn deinit(self: *Name) void {
-    switch (self.name) {
-        .text => |txt| self.allocator.free(txt),
-        .ptr => |*ptr| {
-            if (ptr.prefix) |p| self.allocator.free(p);
-        },
-    }
+    // switch (self.name) {
+    //     .text => |txt| self.allocator.free(txt),
+    //     .ptr => |*ptr| {
+    //         if (ptr.prefix) |p| self.allocator.free(p);
+    //     },
+    // }
+    self.labels.deinit(self.allocator);
 }
 
 //--------------------------------------------------
