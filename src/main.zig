@@ -1,11 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-// IO
-const io = std.io;
-const Writer = io.Writer;
-const Reader = io.Reader;
-
 //--------------------------------------------------
 // DNS Helpers
 const treebeard = @import("treebeard");
@@ -84,29 +79,33 @@ fn queryDNS_TCP(memory: *treebeard.DNSMemory, message: *treebeard.Message) !void
     const stream = try std.net.tcpConnectToAddress(address);
     defer stream.close();
 
-    // Encode message to buffer first (need to know length for TCP)
-    var writer = try memory.getWriter(.allocating);
-    defer writer.deinit();
-
-    try message.encode(&writer);
-    const message_data = writer.writer.buffered();
+    var tcp_writer = try memory.getWriter(.allocating);
+    defer tcp_writer.deinit();
 
     // DNS over TCP requires a 2-byte length prefix
     // Build the complete TCP message: [2-byte length][DNS message]
-    var tcp_buf = std.mem.zeroes([4098]u8);
-    var tcp_writer = Writer.fixed(&tcp_buf);
-    try tcp_writer.writeInt(u16, @intCast(message_data.len), .big);
-    try tcp_writer.writeAll(message_data);
+    // For now, but a placeholder length
+    try tcp_writer.writer.writeInt(u16, 0x1234, .big);
+    try message.encode(&tcp_writer);
+
+    const len: u16 = @intCast(tcp_writer.writer.end - 2); // Remove the 2 byte
+    // length header
+    tcp_writer.writer.buffer[0] = @intCast((len & 0xFF00) >> 8);
+    tcp_writer.writer.buffer[1] = @intCast((len & 0x00FF));
 
     // Send the complete message
-    _ = try stream.write(tcp_writer.buffered());
+    const written = try stream.write(tcp_writer.writer.buffered());
+    if (written != (len + 2)) {
+        return error.TCPPacketNotFullyWritten;
+    }
 
     // Read response: first 2 bytes are length
     var len_buf: [2]u8 = undefined;
     const len_read = try stream.read(&len_buf);
     if (len_read != 2) return error.IncompleteRead;
-    var len_reader = Reader.fixed(&len_buf);
-    const response_len = try len_reader.takeInt(u16, .big);
+    var len_reader = try memory.getReader(.{ .fixed = &len_buf });
+    defer len_reader.deinit();
+    const response_len = try len_reader.reader.takeInt(u16, .big);
 
     // Read the actual DNS message
     const response = try memory.alloc().alloc(u8, response_len);

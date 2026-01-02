@@ -1,10 +1,5 @@
 const std = @import("std");
 
-// IO
-const io = std.io;
-const Reader = io.Reader;
-const Writer = io.Writer;
-
 // Memory
 const Allocator = std.mem.Allocator;
 
