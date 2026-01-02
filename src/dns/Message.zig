@@ -1,10 +1,5 @@
 const std = @import("std");
 
-// IO
-const io = std.io;
-const Writer = io.Writer;
-const Reader = io.Reader;
-
 // Memory
 const Allocator = std.mem.Allocator;
 
@@ -18,11 +13,16 @@ const Opcode = codes.Opcode;
 const Question = @import("Question.zig");
 const Record = @import("Record.zig");
 
+const treebeard = @import("treebeard");
+const DNSMemory = treebeard.DNSMemory;
+const DNSReader = treebeard.DNSReader;
+const DNSWriter = treebeard.DNSWriter;
+
 //--------------------------------------------------
 // DNS Message
 const Message = @This();
 
-allocator: Allocator,
+memory: *DNSMemory,
 
 /// Message header
 header: Header,
@@ -35,9 +35,9 @@ answers: ArrayList(Record),
 
 /// Creates an empty Message, use `addQuestion`, or `addAnswer` to actually
 /// add content to the message.
-pub fn init(alloc: Allocator, transactionID: u16, flags: Header.Flags) Message {
+pub fn init(memory: *DNSMemory, transactionID: u16, flags: Header.Flags) Message {
     return Message{
-        .allocator = alloc,
+        .memory = memory,
         .header = Header{
             .transactionID = transactionID,
             .flags = flags,
@@ -53,17 +53,18 @@ pub fn init(alloc: Allocator, transactionID: u16, flags: Header.Flags) Message {
 
 /// Adds the provided question to our message
 pub fn addQuestion(self: *Message, question: Question) !void {
-    try self.questions.append(self.allocator, question);
+    try self.questions.append(self.memory.alloc(), question);
     self.header.numQuestions += 1;
 }
 
 /// Adds the provided answer (record) to our message
 pub fn addAnswer(self: *Message, answer: Record) !void {
-    try self.answers.append(self.allocator, answer);
+    try self.answers.append(self.memory.alloc(), answer);
     self.header.numAnswers += 1;
 }
 
-pub fn decode(alloc: Allocator, reader: *Reader) !Message {
+pub fn decode(reader: *DNSReader) !Message {
+    const alloc = reader.memory.alloc();
     const header = try Header.decode(reader);
 
     var questions = try parse_questions(alloc, reader, header.numQuestions);
@@ -79,7 +80,7 @@ pub fn decode(alloc: Allocator, reader: *Reader) !Message {
     }
 
     return Message{
-        .allocator = alloc,
+        .memory = reader.memory,
         .header = header,
         .questions = questions,
         .answers = answers,
@@ -88,7 +89,7 @@ pub fn decode(alloc: Allocator, reader: *Reader) !Message {
 
 /// Parse questions from message bytes
 /// Note: This must be done AFTER parsing the header
-fn parse_questions(alloc: Allocator, reader: *Reader, count: u16) !ArrayList(Question) {
+fn parse_questions(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Question) {
     var questions = try ArrayList(Question).initCapacity(alloc, count);
     errdefer {
         for (questions.items) |*q| q.deinit();
@@ -97,7 +98,7 @@ fn parse_questions(alloc: Allocator, reader: *Reader, count: u16) !ArrayList(Que
 
     var i: u16 = 0;
     while (i < count) : (i += 1) {
-        const q = try Question.decode(alloc, reader);
+        const q = try Question.decode(reader);
         try questions.append(alloc, q);
     }
 
@@ -106,7 +107,7 @@ fn parse_questions(alloc: Allocator, reader: *Reader, count: u16) !ArrayList(Que
 
 /// Parse answers from message bytes
 /// Note: This must be done AFTER parsing the header and questions
-fn parse_answers(alloc: Allocator, reader: *Reader, count: u16) !ArrayList(Record) {
+fn parse_answers(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Record) {
     var answers = try ArrayList(Record).initCapacity(alloc, count);
     errdefer {
         for (answers.items) |*a| a.deinit();
@@ -115,7 +116,7 @@ fn parse_answers(alloc: Allocator, reader: *Reader, count: u16) !ArrayList(Recor
 
     var i: u16 = 0;
     while (i < count) : (i += 1) {
-        const a = try Record.decode(alloc, reader);
+        const a = try Record.decode(reader);
         try answers.append(alloc, a);
     }
 
@@ -124,13 +125,13 @@ fn parse_answers(alloc: Allocator, reader: *Reader, count: u16) !ArrayList(Recor
 
 pub fn deinit(self: *Message) void {
     for (self.questions.items) |*q| q.deinit();
-    self.questions.deinit(self.allocator);
+    self.questions.deinit(self.memory.alloc());
 
     for (self.answers.items) |*a| a.deinit();
-    self.answers.deinit(self.allocator);
+    self.answers.deinit(self.memory.alloc());
 }
 
-pub fn encode(self: *const Message, writer: *Writer) !void {
+pub fn encode(self: *const Message, writer: *DNSWriter) !void {
     try self.header.encode(writer);
     for (self.questions.items) |*q| {
         try q.encode(writer);
@@ -204,14 +205,14 @@ pub const Header = packed struct(u96) {
         QR: bool = false,
     };
 
-    pub fn decode(reader: *Reader) !Header {
+    pub fn decode(reader: *DNSReader) !Header {
         const header = Header{
-            .transactionID = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
-            .flags = @bitCast(reader.takeInt(u16, .big) catch return error.NotEnoughBytes),
-            .numQuestions = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
-            .numAnswers = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
-            .numAuthRR = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
-            .numAddRR = reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .transactionID = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .flags = @bitCast(reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes),
+            .numQuestions = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .numAnswers = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .numAuthRR = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .numAddRR = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
         };
 
         if (header.flags.TC) {
@@ -221,13 +222,13 @@ pub const Header = packed struct(u96) {
         return header;
     }
 
-    pub fn encode(header: *const Header, writer: *Writer) !void {
-        writer.writeInt(u16, header.transactionID, .big) catch return error.NotEnoughBytes;
-        writer.writeInt(u16, @bitCast(header.flags), .big) catch return error.NotEnoughBytes;
-        writer.writeInt(u16, header.numQuestions, .big) catch return error.NotEnoughBytes;
-        writer.writeInt(u16, header.numAnswers, .big) catch return error.NotEnoughBytes;
-        writer.writeInt(u16, header.numAuthRR, .big) catch return error.NotEnoughBytes;
-        writer.writeInt(u16, header.numAddRR, .big) catch return error.NotEnoughBytes;
+    pub fn encode(header: *const Header, writer: *DNSWriter) !void {
+        writer.writer.writeInt(u16, header.transactionID, .big) catch return error.NotEnoughBytes;
+        writer.writer.writeInt(u16, @bitCast(header.flags), .big) catch return error.NotEnoughBytes;
+        writer.writer.writeInt(u16, header.numQuestions, .big) catch return error.NotEnoughBytes;
+        writer.writer.writeInt(u16, header.numAnswers, .big) catch return error.NotEnoughBytes;
+        writer.writer.writeInt(u16, header.numAuthRR, .big) catch return error.NotEnoughBytes;
+        writer.writer.writeInt(u16, header.numAddRR, .big) catch return error.NotEnoughBytes;
     }
 
     pub fn basicQuery(transactionID: u16) Header {
@@ -260,7 +261,12 @@ const testing = std.testing;
 const t = @import("testing.zig");
 
 test "header bit order" {
-    var stream = Reader.fixed(t.data.query.duckduckgo);
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    var stream = try pool.getReader(.{ .fixed = t.data.query.duckduckgo });
+    defer stream.deinit();
+
     const header = try Header.decode(&stream);
 
     // Test transaction ID
@@ -287,32 +293,41 @@ test "header bit order" {
 }
 
 test "header write bit order" {
-    var stream = Reader.fixed(t.data.query.duckduckgo);
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    var stream = try pool.getReader(.{ .fixed = t.data.query.duckduckgo });
+    defer stream.deinit();
+
     const header = try Header.decode(&stream);
 
     // Test various destination header lengths
     inline for (.{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 56 }) |l| {
         var writeBuf = std.mem.zeroes([l]u8);
-        var writer = Writer.fixed(&writeBuf);
+        var writer = try pool.getWriter(.{ .fixed = &writeBuf });
+        defer writer.deinit();
+
         if (l < Header.LENGTH) {
             try testing.expectError(error.NotEnoughBytes, header.encode(&writer));
         } else {
             try header.encode(&writer);
         }
 
-        try testing.expectEqualSlices(u8, t.data.query.duckduckgo[0..@min(l, Header.LENGTH)], writer.buffered());
+        try testing.expectEqualSlices(u8, t.data.query.duckduckgo[0..@min(l, Header.LENGTH)], writer.writer.buffered());
     }
 }
 
 test "qname parsing" {
-    const alloc = testing.allocator;
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
 
-    var stream = Reader.fixed(t.data.query.duckduckgo);
+    var stream = try pool.getReader(.{ .fixed = t.data.query.duckduckgo });
+    defer stream.deinit();
     // Parse header to make sure reader advances.
     _ = try Header.decode(&stream);
 
     // Parse our question
-    var question = try Question.decode(alloc, &stream);
+    var question = try Question.decode(&stream);
     defer question.deinit();
 
     // Check the easy stuff first
@@ -323,19 +338,20 @@ test "qname parsing" {
     const qname = &question.name;
     try testing.expectEqual(2, qname.label_count);
 
-    // Make sure we parsed the correct name
-    switch (qname.name) {
-        .text => |name| try testing.expectEqualStrings("duckduckgo.com.", name),
-        else => return error.InvalidName,
-    }
+    const buf = try std.fmt.allocPrint(testing.allocator, "{f}", .{qname});
+    defer testing.allocator.free(buf);
+
+    try testing.expectEqualStrings("duckduckgo.com.", buf);
 }
 
 test "message parse" {
-    const alloc = testing.allocator;
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
 
-    var stream = Reader.fixed(t.data.query.duckduckgo);
+    var stream = try pool.getReader(.{ .fixed = t.data.query.duckduckgo });
+    defer stream.deinit();
 
-    var message = try Message.decode(alloc, &stream);
+    var message = try Message.decode(&stream);
     defer message.deinit();
 
     try testing.expectEqual(1, message.header.numQuestions);
@@ -344,23 +360,26 @@ test "message parse" {
 
 test "basic encode" {
     const Name = @import("Name.zig");
-    const allocator = testing.allocator;
+
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
 
     var buf = std.mem.zeroes([512]u8);
-    var writer = Writer.fixed(&buf);
+    var writer = try pool.getWriter(.{ .fixed = &buf });
+    defer writer.deinit();
 
     const query = "duckduckgo.com";
-    var name = try Name.fromStr(allocator, query);
+    var name = try Name.fromStr(&pool, query);
     errdefer name.deinit();
 
     const q = Question{
-        .allocator = allocator,
+        .memory = &pool,
         .name = name,
         .type = .A,
         .class = .IN,
     };
 
-    var message = Message.init(allocator, 0x3e3c, Header.Flags{
+    var message = Message.init(&pool, 0x3e3c, Header.Flags{
         .QR = false,
         .OPCODE = .query,
         .AA = false,
@@ -378,5 +397,5 @@ test "basic encode" {
 
     try message.encode(&writer);
 
-    try testing.expectEqualSlices(u8, t.data.query.duckduckgo_simple, writer.buffered());
+    try testing.expectEqualSlices(u8, t.data.query.duckduckgo_simple, writer.writer.buffered());
 }

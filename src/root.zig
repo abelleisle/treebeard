@@ -15,6 +15,10 @@ pub const Question = @import("dns/Question.zig");
 pub const Name = @import("dns/Name.zig");
 pub const Record = @import("dns/Record.zig");
 
+pub const DNSMemory = @import("pool.zig").DNSMemory;
+pub const DNSReader = @import("pool.zig").DNSReader;
+pub const DNSWriter = @import("pool.zig").DNSWriter;
+
 //--------------------------------------------------
 // Local imports
 const std = @import("std");
@@ -25,15 +29,15 @@ const Allocator = std.mem.Allocator;
 //--------------------------------------------------
 // DNS Helpers
 
-pub fn buildQuery(allocator: Allocator, query: []const u8, record_type: Type) !Message {
-    var name = try Name.fromStr(allocator, query);
+pub fn buildQuery(memory: *DNSMemory, query: []const u8, record_type: Type) !Message {
+    var name = try Name.fromStr(memory, query);
     errdefer name.deinit();
 
-    const question = Question{ .allocator = allocator, .name = name, .class = .IN, .type = record_type };
+    const question = Question{ .memory = memory, .name = name, .class = .IN, .type = record_type };
 
     const flags = Header.Flags{ .RD = true, .AD = true };
 
-    var message = Message.init(allocator, 1234, flags);
+    var message = Message.init(memory, 1234, flags);
     try message.addQuestion(question);
 
     return message;

@@ -14,6 +14,11 @@ const Type = codes.Type;
 const Class = codes.Class;
 const Name = @import("Name.zig");
 
+const treebeard = @import("treebeard");
+const DNSMemory = treebeard.DNSMemory;
+const DNSReader = treebeard.DNSReader;
+const DNSWriter = treebeard.DNSWriter;
+
 //--------------------------------------------------
 // DNS Record
 
@@ -21,7 +26,7 @@ const Name = @import("Name.zig");
 const Record = @This();
 
 /// Allocator for handling name and rdata init
-allocator: Allocator,
+memory: *DNSMemory,
 
 /// Name of the node to which this record pertains
 name: Name,
@@ -72,7 +77,7 @@ const RData = union(enum) {
     // },
     Unknown: []u8, // For unimplemented types
 
-    pub fn deinit(self: *RData, allocator: Allocator) void {
+    pub fn deinit(self: *RData, memory: *DNSMemory) void {
         switch (self.*) {
             .MX => |*mx| mx.exchanger.deinit(),
             .CNAME => |*name| name.deinit(),
@@ -83,72 +88,72 @@ const RData = union(enum) {
                 soa.rname.deinit();
             },
             .TXT => |txt| {
-                allocator.free(txt);
+                memory.alloc().free(txt);
             },
-            .Unknown => |data| allocator.free(data),
+            .Unknown => |data| memory.alloc().free(data),
             else => {},
         }
     }
 };
 
 /// Decode the Record type from the encoded DNS data
-pub fn decode(allocator: Allocator, reader: *Reader) !Record {
-    var n = try Name.decode(allocator, reader);
+pub fn decode(reader: *DNSReader) !Record {
+    var n = try Name.decode(reader);
     errdefer n.deinit();
 
     const t = try Type.decode(reader);
     const c = try Class.decode(reader);
-    const ttl = try reader.takeInt(u32, .big);
-    const rdlength = try reader.takeInt(u16, .big);
+    const ttl = try reader.reader.takeInt(u32, .big);
+    const rdlength = try reader.reader.takeInt(u16, .big);
 
     // Parse RDATA based on type
     const rdata = switch (t) {
         .A => blk: {
             if (rdlength != 4) return error.InvalidARecord;
-            const data = try reader.take(4);
+            const data = try reader.reader.take(4);
             var addr: [4]u8 = undefined;
             @memcpy(&addr, data);
             break :blk RData{ .A = addr };
         },
         .AAAA => blk: {
             if (rdlength != 16) return error.InvalidAAAARecord;
-            const data = try reader.take(16);
+            const data = try reader.reader.take(16);
             var addr: [16]u8 = undefined;
             @memcpy(&addr, data);
             break :blk RData{ .AAAA = addr };
         },
         .MX => blk: {
             if (rdlength < 3) return error.InvalidMXRecord;
-            const pref = try reader.takeInt(u16, .big);
-            const exchanger = try Name.decode(allocator, reader);
+            const pref = try reader.reader.takeInt(u16, .big);
+            const exchanger = try Name.decode(reader);
             break :blk RData{ .MX = .{ .preference = pref, .exchanger = exchanger } };
         },
         .CNAME => blk: {
-            const cname = try Name.decode(allocator, reader);
+            const cname = try Name.decode(reader);
             break :blk RData{ .CNAME = cname };
         },
         .NS => blk: {
-            const ns = try Name.decode(allocator, reader);
+            const ns = try Name.decode(reader);
             break :blk RData{ .NS = ns };
         },
         .PTR => blk: {
-            const ptr = try Name.decode(allocator, reader);
+            const ptr = try Name.decode(reader);
             break :blk RData{ .PTR = ptr };
         },
         .TXT => blk: {
-            const data = try reader.take(rdlength);
-            const owned = try allocator.dupe(u8, data);
+            const data = try reader.reader.take(rdlength);
+            const owned = try reader.memory.alloc().dupe(u8, data);
             break :blk RData{ .TXT = owned };
         },
         else => blk: {
-            const data = try reader.take(rdlength);
-            const owned = try allocator.dupe(u8, data);
+            const data = try reader.reader.take(rdlength);
+            const owned = try reader.memory.alloc().dupe(u8, data);
             break :blk RData{ .Unknown = owned };
         },
     };
 
     return Record{
-        .allocator = allocator,
+        .memory = reader.memory,
         .name = n,
         .type = t,
         .class = c,
@@ -158,39 +163,39 @@ pub fn decode(allocator: Allocator, reader: *Reader) !Record {
 }
 
 /// Encode the Record following the DNS encoding spec
-pub fn encode(self: *Record, writer: *Writer) !void {
+pub fn encode(self: *Record, writer: *DNSWriter) !void {
     try self.name.encode(writer);
     try self.type.encode(writer);
     try self.class.encode(writer);
-    try writer.writeInt(u32, self.ttl, .big);
+    try writer.writer.writeInt(u32, self.ttl, .big);
 
     switch (self.rdata) {
         .A => |*ip| {
-            const written = try writer.write(ip);
+            const written = try writer.writer.write(ip);
             if (written != ip.len) {
                 return error.NotEnoughBytes;
             }
         },
         .AAAA => |*ip| {
-            const written = try writer.write(ip);
+            const written = try writer.writer.write(ip);
             if (written != ip.len) {
                 return error.NotEnoughBytes;
             }
         },
         .CNAME, .NS, .PTR => |*name| try name.encode(writer),
         .MX => |*mx| {
-            try writer.writeInt(u16, mx.preference, .big);
+            try writer.writer.writeInt(u16, mx.preference, .big);
             try mx.exchanger.encode(writer);
         },
         .TXT => |txt| {
-            const written = try writer.write(txt);
+            const written = try writer.writer.write(txt);
             if (written != txt.len) {
                 return error.NotEnoughBytes;
             }
         },
         .Unknown => |data| {
-            try writer.writeInt(u16, @intCast(data.len), .big);
-            _ = try writer.write(data);
+            try writer.writer.writeInt(u16, @intCast(data.len), .big);
+            _ = try writer.writer.write(data);
         },
         else => return error.EncodeNotImplemented,
     }
@@ -249,5 +254,5 @@ pub fn display(self: *const Record) !void {
 /// Deinit the Record type
 pub fn deinit(self: *Record) void {
     self.name.deinit();
-    self.rdata.deinit(self.allocator);
+    self.rdata.deinit(self.memory);
 }
