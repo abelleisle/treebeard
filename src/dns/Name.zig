@@ -305,6 +305,22 @@ pub fn encode(self: *Name, writer: *DNSWriter) !void {
     // }
 }
 
+pub fn encodeLength(self: *const Name) usize {
+    var length: usize = 0; // Length of root tag
+
+    var iter = self.labels.iter();
+    while (iter.next()) |label| {
+        length += 1; // Length byte
+        length += switch (label.*) {
+            .root => 0,
+            .ptr => 1,
+            .text => |txt| txt.len,
+        };
+    }
+
+    return length;
+}
+
 pub fn format(self: *const Name, writer: anytype) !void {
     var iter = self.labels.iter();
     var first = true;
@@ -673,4 +689,33 @@ test "pointer encode, prefix" {
 
     const encoded = &[_]u8{ 0xfb, 0x3c, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0x98, 0x76, 6, 's', 't', 'a', 't', 'i', 'c', 4, 's', 'i', 't', 'e', 0xC0, 0x02 };
     try testing.expectEqualSlices(u8, encoded, writer.writer.buffered());
+}
+
+test "encode length" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    {
+        var name = try Name.fromStr(&pool, "example.com.");
+        defer name.deinit();
+
+        try testing.expectEqual(13, name.encodeLength());
+    }
+
+    {
+        var target = try Name.fromStr(&pool, "example.com.");
+        defer target.deinit();
+
+        var name = try Name.fromPtr(&pool, "schmaple", &target);
+        defer name.deinit();
+
+        try testing.expectEqual(11, name.encodeLength());
+    }
+
+    {
+        var name = try Name.fromStr(&pool, ".");
+        defer name.deinit();
+
+        try testing.expectEqual(1, name.encodeLength());
+    }
 }

@@ -95,7 +95,7 @@ fn handle_message(memory: *DNSMemory, message: *Message) !void {
                                 .class = .IN,
                                 .ttl = 300,
                                 .memory = memory,
-                                .rdata = Record.RData{ .AAAA = .{ 20, 1, 4, 70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12, 34 } },
+                                .rdata = Record.RData{ .AAAA = .{ 0x20, 0x01, 0x4, 0x70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x12, 0x34 } },
                             };
                             try message.addAnswer(record);
                         },

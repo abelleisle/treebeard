@@ -179,15 +179,17 @@ pub fn encode(self: *Record, writer: *DNSWriter) !void {
                 return error.NotEnoughBytes;
             }
         },
-        // TODO encode length
-        .CNAME, .NS, .PTR => |*name| try name.encode(writer),
+        .CNAME, .NS, .PTR => |*name| {
+            try writer.writer.writeInt(u16, @intCast(name.encodeLength()), .big);
+            try name.encode(writer);
+        },
         .MX => |*mx| {
-            // TODO encode length
+            try writer.writer.writeInt(u16, @intCast(mx.exchanger.encodeLength() + 2), .big);
             try writer.writer.writeInt(u16, mx.preference, .big);
             try mx.exchanger.encode(writer);
         },
         .TXT => |txt| {
-            // TODO encode length
+            try writer.writer.writeInt(u16, @intCast(txt.len), .big);
             const written = try writer.writer.write(txt);
             if (written != txt.len) {
                 return error.NotEnoughBytes;
