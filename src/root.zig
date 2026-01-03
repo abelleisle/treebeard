@@ -54,4 +54,5 @@ test {
     _ = @import("dns/Record.zig");
     _ = @import("dns/codes.zig");
     _ = @import("pool.zig");
+    _ = @import("NameTree.zig");
 }
