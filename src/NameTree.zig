@@ -15,7 +15,7 @@ pub fn NameTree(comptime T: type) type {
 
         key: []u8,
         value: ?T,
-        children: ?std.StringHashMap(NameTree(T)),
+        children: ?std.StringHashMap(NT),
 
         memory: *DNSMemory,
 
@@ -39,11 +39,11 @@ pub fn NameTree(comptime T: type) type {
         }
 
         /// Adds a key/value pair as the child of this entry.
-        pub fn addChild(self: *NT, key: []u8, value: ?T) ?*NT {
+        pub fn addChild(self: *NT, key: []const u8, value: ?T) !*NT {
             // We need to add a child? Let's make sure we have a children
             // tree.
             if (self.children == null) {
-                self.children = std.StringHashMap(NameTree(T)).init(self.memory.alloc());
+                self.children = std.StringHashMap(NT).init(self.memory.alloc());
             }
 
             var children = self.children.?;
@@ -77,7 +77,27 @@ pub fn NameTree(comptime T: type) type {
         /// De-inits a name tree object and frees the required memory.
         pub fn deinit(self: *NT) void {
             self.memory.alloc().free(self.key);
-            if (self.children) |*c| c.deinit();
+
+            // Can our value type have declarations?
+            const hasChildren =
+                (@typeInfo(T) == .@"struct") or
+                (@typeInfo(T) == .@"enum") or
+                (@typeInfo(T) == .@"union") or
+                (@typeInfo(T) == .@"opaque");
+
+            // If our value type has a "deinit" field, we should call it.
+            if (hasChildren and @hasDecl(T, "deinit")) {
+                if (self.value) |*value| value.deinit();
+            }
+
+            if (self.children) |*c| {
+                var iter = c.valueIterator();
+                while (iter.next()) |child| {
+                    child.deinit();
+                }
+                c.deinit();
+                self.children = null;
+            }
         }
     };
 }
@@ -92,4 +112,41 @@ test "creating tree" {
 
     var tree = try NameTree(i32).init(&pool, ".", null);
     defer tree.deinit();
+}
+
+test "add node" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    var tree = try NameTree(i32).init(&pool, ".", null);
+    defer tree.deinit();
+
+    var com = try tree.addChild("com", null);
+    defer com.deinit();
+
+    var example = try com.addChild("example", 32);
+    defer example.deinit();
+}
+
+test "deinit node" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    const Zone = struct {
+        value: []u8,
+
+        pub fn deinit(self: *@This()) void {
+            testing.allocator.free(self.value);
+        }
+    };
+
+    const zone = Zone{
+        .value = try std.testing.allocator.alloc(u8, 1024),
+    };
+
+    var tree = try NameTree(Zone).init(&pool, ".", null);
+    defer tree.deinit();
+
+    var com = try tree.addChild("com", zone);
+    defer com.deinit();
 }
