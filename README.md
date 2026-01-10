@@ -2,7 +2,7 @@
 
 This is a stub mirror. The full source code for this commit is at:
 
-https://git.bitcicle.com/andy/treebeard/src/commit/1fe9429f9f7fcf36061efeabf516deb75450595b
+https://git.bitcicle.com/andy/treebeard/src/commit/2a3652ca1b988df54aac872e98125da694cda78d
 
 To browse or clone the full repository, visit:
 
