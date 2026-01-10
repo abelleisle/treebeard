@@ -35,6 +35,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
     var addr: std.posix.sockaddr = undefined;
     var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr);
 
+    var requests: usize = 0;
     while (true) {
         var reader = try memory.getReader(.udp);
         defer reader.deinit();
@@ -64,6 +65,9 @@ pub fn recv_loop(memory: *DNSMemory) !void {
         _ = posix.sendto(sock, writer.writer.buffered(), 0, &addr, addr_len) catch |e| {
             return e;
         };
+
+        requests += 1;
+        std.debug.print("\rRequests: {d}", .{requests});
     }
 }
 

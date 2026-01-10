@@ -14,6 +14,11 @@ pub fn main() !void {
     var pool = try treebeard.DNSMemory.init();
     defer pool.deinit();
 
+    try pool.preheat(.{
+        .udp = 1024,
+        .labels = 128000,
+    });
+
     try udp.recv_loop(&pool);
 
     // const domain = if (args.len > 1) args[1] else "bitcicle.com";
