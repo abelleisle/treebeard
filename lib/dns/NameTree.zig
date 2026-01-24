@@ -17,6 +17,8 @@ pub fn NameTree(comptime T: type) type {
         value: ?T,
         children: ?std.StringHashMap(NT),
 
+        freed: bool,
+
         memory: *DNSMemory,
 
         /// Creates a name tree.
@@ -35,6 +37,7 @@ pub fn NameTree(comptime T: type) type {
                 .value = value,
                 .children = null,
                 .memory = memory,
+                .freed = false,
             };
         }
 
@@ -46,7 +49,9 @@ pub fn NameTree(comptime T: type) type {
                 self.children = std.StringHashMap(NT).init(self.memory.alloc());
             }
 
-            var children = self.children.?;
+            // Important: reference the children so we don't clone
+            // and modify our own hashmap
+            const children = &(self.children orelse unreachable);
 
             // Try to put an entry in for our current child
             var gop = try children.getOrPut(key);
@@ -76,6 +81,12 @@ pub fn NameTree(comptime T: type) type {
 
         /// De-inits a name tree object and frees the required memory.
         pub fn deinit(self: *NT) void {
+            // This isn't super awesome, but it allows a child
+            // to either free itself, or get freed by the parent.
+            // If we try to do both, this prevents a double free.
+            if (self.freed) return;
+            self.freed = true;
+
             self.memory.alloc().free(self.key);
 
             // Can our value type have declarations?

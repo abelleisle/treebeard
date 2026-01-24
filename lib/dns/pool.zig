@@ -5,6 +5,7 @@
 
 // std
 const std = @import("std");
+const builtin = @import("builtin");
 
 // IO
 const Io = std.Io;
@@ -110,6 +111,7 @@ const PreheatOptions = struct {
 pub const DNSMemory = struct {
     // Global allocator for general allocations
     arena: ArenaAllocator,
+    _allocator: Allocator, // Only used to access base allocator during testing
 
     // Pools
     pools: struct {
@@ -120,8 +122,6 @@ pub const DNSMemory = struct {
     preheated: bool,
 
     pub fn init() !DNSMemory {
-        const builtin = @import("builtin");
-
         // Use testing allocator in test mode, page_allocator otherwise
         const base_allocator = if (builtin.is_test)
             std.testing.allocator
@@ -137,6 +137,7 @@ pub const DNSMemory = struct {
 
         return DNSMemory{
             .arena = arena,
+            ._allocator = base_allocator,
             .pools = .{
                 .udp = UDPMessagePool.init(pool_allocator),
                 .label = LabelPool.init(pool_allocator),
@@ -165,7 +166,10 @@ pub const DNSMemory = struct {
     }
 
     pub inline fn alloc(self: *DNSMemory) Allocator {
-        return self.arena.allocator();
+        return if (builtin.is_test)
+            self._allocator
+        else
+            self.arena.allocator();
     }
 
     pub fn getReader(self: *DNSMemory, readerType: ReaderType) !DNSReader {
@@ -308,8 +312,8 @@ test "udp pool create many buffers" {
     defer pool.deinit();
 
     // Allocate 5 buffers at once
-    const buffers = try pool.pools.udp.createMany(pool.arena.allocator(), 5);
-    defer pool.pools.udp.destroyMany(pool.arena.allocator(), buffers);
+    const buffers = try pool.pools.udp.createMany(pool.alloc(), 5);
+    defer pool.pools.udp.destroyMany(pool.alloc(), buffers);
 
     // Verify we got 5 buffers
     try testing.expectEqual(5, buffers.len);
