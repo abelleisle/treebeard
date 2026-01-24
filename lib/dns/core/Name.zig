@@ -39,7 +39,7 @@ pub const Label = struct {
     prev: ?*Label,
 };
 
-const LabelList = struct {
+pub const LabelList = struct {
     front: *Label,
     back: *Label,
 
@@ -80,6 +80,15 @@ const LabelList = struct {
         return LabelListIterator{
             .ptr = null,
             .list = self,
+            .forwards = true,
+        };
+    }
+
+    pub fn iterReverse(self: *const LabelList) LabelListIterator {
+        return LabelListIterator{
+            .ptr = null,
+            .list = self,
+            .forwards = false,
         };
     }
 
@@ -88,19 +97,33 @@ const LabelList = struct {
         /// we haven't started iterating yet.
         ptr: ?*Label,
         list: *const LabelList,
+        forwards: bool,
 
         pub fn next(self: *LabelListIterator) ?*LabelBody {
             // We've started iterating
             if (self.ptr) |p| {
-                if (p.next) |nx| {
-                    self.ptr = nx;
-                    return &nx.body;
+                if (self.forwards) {
+                    if (p.next) |nx| {
+                        self.ptr = nx;
+                        return &nx.body;
+                    } else {
+                        return null;
+                    }
                 } else {
-                    return null;
+                    if (p.prev) |nx| {
+                        self.ptr = nx;
+                        return &nx.body;
+                    } else {
+                        return null;
+                    }
                 }
             } else {
-                self.ptr = self.list.front;
-                return &self.list.front.body;
+                if (self.forwards) {
+                    self.ptr = self.list.front;
+                } else {
+                    self.ptr = self.list.back;
+                }
+                return &self.ptr.?.body;
             }
         }
     };

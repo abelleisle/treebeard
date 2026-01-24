@@ -3,6 +3,7 @@ const std = @import("std");
 // DNS
 const treebeard = @import("treebeard");
 const DNSMemory = treebeard.DNSMemory;
+const Name = treebeard.Name;
 
 //--------------------------------------------------
 // Name Tree
@@ -108,6 +109,21 @@ pub fn NameTree(comptime T: type) type {
                 }
                 c.deinit();
                 self.children = null;
+            }
+        }
+
+        pub fn find(self: *const NT, name: *const Name) usize {
+            var iter = name.labels.iterReverse();
+            return self.find_inner(&iter);
+        }
+
+        fn find_inner(self: *const NT, labelList: *Name.LabelList.LabelListIterator, depth: usize) usize {
+            if (labelList.next()) |label| {
+                if (self.key == label) {} else {
+                    return depth; // TODO
+                }
+            } else {
+                return depth; // TODO
             }
         }
     };
