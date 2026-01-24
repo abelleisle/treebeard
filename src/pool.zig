@@ -20,7 +20,7 @@ const heap = std.heap;
 const ArenaAllocator = heap.ArenaAllocator;
 
 // DNS
-const Label = @import("dns/Name.zig").Label;
+const Label = @import("core/Name.zig").Label;
 
 //--------------------------------------------------
 // Types
@@ -279,8 +279,8 @@ pub const DNSWriter = struct {
 //--------------------------------------------------
 // Testing
 const testing = std.testing;
-const t = @import("dns/testing.zig");
-const Message = @import("dns/Message.zig");
+const t = @import("core/testing.zig");
+const Message = @import("core/Message.zig");
 
 test "create main pool" {
     var pool = try DNSMemory.init();
