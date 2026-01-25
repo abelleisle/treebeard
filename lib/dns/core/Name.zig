@@ -27,6 +27,11 @@ total_length: usize,
 
 encode_loc: ?u14 = null,
 
+pub const LabelText = union(enum) {
+    root,
+    text: []const u8,
+};
+
 const LabelBody = union(enum) {
     root,
     text: []const u8,
@@ -81,6 +86,7 @@ pub const LabelList = struct {
             .ptr = null,
             .list = self,
             .forwards = true,
+            .parent = null,
         };
     }
 
@@ -89,15 +95,43 @@ pub const LabelList = struct {
             .ptr = null,
             .list = self,
             .forwards = false,
+            .parent = null,
         };
     }
 
     pub const LabelListIterator = struct {
         /// What node are we pointing to? If the value is none,
         /// we haven't started iterating yet.
-        ptr: ?*Label,
+        ptr: ?*const Label,
+
+        /// Which label list are we iterating
         list: *const LabelList,
+
+        /// Traversing forwards?
         forwards: bool,
+
+        /// In progress:
+        /// Might not be needed:
+        /// In the case our label list contains a pointer, we need
+        /// a sub iterator to iterate the pointer.
+        subPtr: ?*const Label,
+
+        /// Trace how deep into our pointer tree we are.
+        ///
+        /// To reverse iterate through a label list with pointers:
+        /// 1. Start at the back
+        /// 2. We know that pointers HAVE to be the last element
+        /// 3. If the last element is a pointer, set depth += 1 and set
+        ///    ptr to the last element of the pointed list.
+        /// 4. Repeat from 1 with that list.
+        /// 5. Once we hit the front of the bottom list, we need to then
+        ///    start at the front of our current list and go forwards
+        ///    until we find the pointer, and follow it until the depth
+        ///    value, then stop before we hit the pointer in that depth.
+        ///    * That gives us the value BEFORE the pointer at that depth.
+        /// 6. Continue backwards until we hit the front, then repeat 5 until
+        ///    depth is zero.
+        depth: usize,
 
         pub fn next(self: *LabelListIterator) ?*LabelBody {
             // We've started iterating
@@ -117,6 +151,7 @@ pub const LabelList = struct {
                         return null;
                     }
                 }
+                // We haven't started iterating yet (we haven't called next() yet)
             } else {
                 if (self.forwards) {
                     self.ptr = self.list.front;
@@ -125,6 +160,11 @@ pub const LabelList = struct {
                 }
                 return &self.ptr.?.body;
             }
+        }
+
+        pub fn nextText(self: *LabelListIterator) ?*LabelText {
+            // We're currently iterating
+            if (subPtr) |*ptr| {} else {}
         }
     };
 };
