@@ -30,7 +30,7 @@ const Allocator = std.mem.Allocator;
 // DNS Helpers
 
 pub fn buildQuery(memory: *DNSMemory, query: []const u8, record_type: Type) !Message {
-    var name = try Name.fromStr(memory, query);
+    var name = try Name.fromStr(query);
     errdefer name.deinit();
 
     const question = Question{ .memory = memory, .name = name, .class = .IN, .type = record_type };
