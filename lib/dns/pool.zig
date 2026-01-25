@@ -20,15 +20,11 @@ const Allocator = mem.Allocator;
 const heap = std.heap;
 const ArenaAllocator = heap.ArenaAllocator;
 
-// DNS
-const Label = @import("core/Name.zig").Label;
-
 //--------------------------------------------------
 // Types
 const UDPMessageBuffer = [512]u8;
 
 const UDPBufPool = std.heap.MemoryPool(UDPMessageBuffer);
-const LabelBufPool = std.heap.MemoryPool(Label);
 
 const PoolType = union(enum) {
     UDP,
@@ -81,29 +77,8 @@ const UDPMessagePool = struct {
     }
 };
 
-const LabelPool = struct {
-    pool: LabelBufPool,
-
-    pub fn init(allocator: Allocator) LabelPool {
-        return LabelPool{ .pool = LabelBufPool.init(allocator) };
-    }
-
-    pub fn borrow(self: *LabelPool) !*Label {
-        return try self.pool.create();
-    }
-
-    pub fn giveback(self: *LabelPool, label: *Label) void {
-        self.pool.destroy(label);
-    }
-
-    pub fn deinit(self: *LabelPool) void {
-        self.pool.deinit();
-    }
-};
-
 const PreheatOptions = struct {
     udp: u32,
-    labels: u32,
 };
 
 /// Master DNS pool.
@@ -116,7 +91,6 @@ pub const DNSMemory = struct {
     // Pools
     pools: struct {
         udp: UDPMessagePool,
-        label: LabelPool,
     },
 
     preheated: bool,
@@ -140,7 +114,6 @@ pub const DNSMemory = struct {
             ._allocator = base_allocator,
             .pools = .{
                 .udp = UDPMessagePool.init(pool_allocator),
-                .label = LabelPool.init(pool_allocator),
             },
             .preheated = false,
         };
@@ -149,7 +122,6 @@ pub const DNSMemory = struct {
     pub fn deinit(self: *DNSMemory) void {
         // Free child pools
         self.pools.udp.deinit();
-        self.pools.label.deinit();
 
         // Free arena allocator
         self.arena.deinit();
@@ -162,7 +134,6 @@ pub const DNSMemory = struct {
         self.preheated = true;
 
         try self.pools.udp.pool.preheat(options.udp);
-        try self.pools.label.pool.preheat(options.labels);
     }
 
     pub inline fn alloc(self: *DNSMemory) Allocator {
