@@ -547,7 +547,7 @@ test "infinite loop rejection" {
     {
         const loop_data = &[_]u8{
             0x03, 'w', 'w', 'w', 0x00, // Valid label "www"
-            0xc0, 0x00, // Point to "www"
+            0xc0, 0x05, // Point to ourselves
         };
 
         var reader = try pool.getReader(.{ .fixed = loop_data });
@@ -557,8 +557,8 @@ test "infinite loop rejection" {
         const www = try Name.decode(&reader);
         try expectEqualText("www.", www);
 
-        const ptr = try Name.decode(&reader);
-        try expectEqualText("www.", ptr);
+        // Make sure we can't point to ourselves
+        try testing.expectError(error.InvalidPointerAddress, Name.decode(&reader));
     }
 }
 
