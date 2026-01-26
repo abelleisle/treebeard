@@ -83,7 +83,7 @@ fn handle_message(memory: *DNSMemory, message: *Message) !void {
                     switch (question.type) {
                         .A => {
                             const record = Record{
-                                .name = try Name.fromPtr(memory, null, &question.name),
+                                .name = question.name,
                                 .type = .A,
                                 .class = .IN,
                                 .ttl = 300,
@@ -94,7 +94,7 @@ fn handle_message(memory: *DNSMemory, message: *Message) !void {
                         },
                         .AAAA => {
                             const record = Record{
-                                .name = try Name.fromPtr(memory, null, &question.name),
+                                .name = question.name,
                                 .type = .AAAA,
                                 .class = .IN,
                                 .ttl = 300,
