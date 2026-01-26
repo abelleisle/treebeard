@@ -24,10 +24,10 @@ const MAX_LABEL_LENGTH: usize = 63; // Max length of single label
 /// There are a few approaches we can use to store names.
 /// Initially we used a linked-list system. This used less memory
 /// since we pulled labels from a pre-allocated memory pool. The
-/// downside of this was memory locality. Pretty cache-inefficent.
+/// downside of this was memory locality. Pretty cache-inefficient.
 ///
 /// Since DNS names can only be at most 255 characters, we can allow
-/// labels to exist on the stack to improve locaility and keep name
+/// labels to exist on the stack to improve locality and keep name
 /// creation consistently performant.
 _data: [MAX_NAME_BUFFER]u8,
 
