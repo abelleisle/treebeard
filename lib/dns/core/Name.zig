@@ -123,9 +123,8 @@ pub fn decode(reader: *DNSReader) !Name {
     var reader_offset: usize = reader.reader.seek; // Tracks read progress
     var write_pos: usize = 0;
     var label_pos: usize = 0;
-    var jumps: usize = 0;
 
-    while ((write_pos < MAX_NAME_BUFFER) and (parse_offset < end) and (jumps < 10)) {
+    while ((write_pos < MAX_NAME_BUFFER) and (parse_offset < end)) {
         const header: LabelHeader = @bitCast(buffer[parse_offset]);
 
         // Only take if we're still following a non-pointer name
@@ -187,7 +186,6 @@ pub fn decode(reader: *DNSReader) !Name {
                 if (pointer >= parse_offset) return error.InvalidPointerAddress;
 
                 parse_offset = pointer;
-                jumps += 1;
             },
             // Reserved
             else => return error.InvalidLabelHeader,
@@ -229,11 +227,10 @@ fn getLengthFromBuffer(reader: *const DNSReader) !NameInfo {
     var offset: usize = reader.reader.seek;
     var total: usize = 0;
     var num_labels: usize = 0;
-    var jumps: usize = 0; // Total number of pointer jumps
 
     const end = @min(reader.reader.end, buffer.len);
 
-    while ((total < MAX_NAME_BUFFER) and (offset < end) and (jumps < 10)) {
+    while ((total < MAX_NAME_BUFFER) and (offset < end)) {
         const header: LabelHeader = @bitCast(buffer[offset]);
 
         switch (header.type) {
@@ -259,7 +256,6 @@ fn getLengthFromBuffer(reader: *const DNSReader) !NameInfo {
                 // We can only point to previously read names
                 if (pointer >= offset) return error.InvalidPointerAddress;
                 offset = pointer;
-                jumps += 1;
             },
             // Reserved (unused as of now)
             else => return error.InvalidLabelHeader,
