@@ -34,11 +34,21 @@ _data: [MAX_NAME_BUFFER]u8,
 /// Backing buffer to store label offset indexes.
 _labels: [MAX_LABEL_COUNT]u8,
 
-/// Slice to the portion of _data allocated to our name.
-name: []const u8,
+/// Length of the name data in _data.
+_name_len: usize,
 
-/// Slice to the portion of _labels used to point to label offsets.
-labels: []const u8,
+/// Number of labels stored in _labels.
+_labels_len: usize,
+
+/// Get the name data as a slice.
+pub fn name(self: *const Name) []const u8 {
+    return self._data[0..self._name_len];
+}
+
+/// Get the label offsets as a slice.
+pub fn labels(self: *const Name) []const u8 {
+    return self._labels[0..self._labels_len];
+}
 
 /// Label header/type
 /// From: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-10
@@ -49,11 +59,11 @@ const LabelHeader = packed struct(u8) {
 
 /// Create an encoded DNS name from human readable string
 pub fn fromStr(domain: []const u8) !Name {
-    var name = Name{
+    var result = Name{
         ._data = std.mem.zeroes([MAX_NAME_BUFFER]u8),
         ._labels = std.mem.zeroes([MAX_LABEL_COUNT]u8),
-        .name = undefined,
-        .labels = undefined,
+        ._name_len = 0,
+        ._labels_len = 0,
     };
 
     var offset: usize = 0;
@@ -61,7 +71,7 @@ pub fn fromStr(domain: []const u8) !Name {
 
     var iter = std.mem.splitScalar(u8, domain, '.');
     while (iter.next()) |label| {
-        if (offset >= domain.len) {
+        if (offset > domain.len) {
             return error.InvalidName;
         }
 
@@ -72,50 +82,44 @@ pub fn fromStr(domain: []const u8) !Name {
                 return error.TooManyLabels;
             }
             // Set the label offset table
-            name._labels[num_labels] = @intCast(offset);
+            result._labels[num_labels] = @intCast(offset);
             num_labels += 1;
 
             // Copy label to our buffer
-            name._data[offset] = @intCast(label.len); // This is safe since
+            result._data[offset] = @intCast(label.len); // This is safe since
             // we know len < 63
-            @memcpy(name._data[offset + 1 .. offset + label.len + 1], label);
+            @memcpy(result._data[offset + 1 .. offset + label.len + 1], label);
 
             offset += (label.len + 1);
         }
     }
 
     // Add root label
-    name._labels[num_labels] = @intCast(offset);
-    name._data[offset] = 0;
-    num_labels += 1;
+    result._data[offset] = 0;
     offset += 1;
 
-    name.name = name._data[0..offset];
-    name.labels = name._labels[0..num_labels];
+    result._name_len = offset;
+    result._labels_len = num_labels;
 
-    return name;
+    return result;
 }
 
 /// Encodes the provided name following the DNS NAME encoding spec
-pub fn encode(self: *Name, writer: *DNSWriter) !void {
-    const written_len = try writer.writer.write(self.name);
-    if (written_len != self.name.len) {
+pub fn encode(self: *const Name, writer: *DNSWriter) !void {
+    const name_data = self.name();
+    const written_len = try writer.writer.write(name_data);
+    if (written_len != name_data.len) {
         return error.NotEnoughBytes;
     }
 }
 
 pub fn decode(reader: *DNSReader) !Name {
-    var name = Name{
+    var result = Name{
         ._data = std.mem.zeroes([MAX_NAME_BUFFER]u8),
         ._labels = std.mem.zeroes([MAX_LABEL_COUNT]u8),
-        .name = undefined,
-        .labels = undefined,
+        ._name_len = 0,
+        ._labels_len = 0,
     };
-
-    name.name.ptr = &name._data;
-    name.name.len = 0;
-    name.labels.ptr = &name._labels;
-    name.labels.len = 0;
 
     const buffer = reader.reader.buffer;
     const end = @min(buffer.len, reader.reader.end);
@@ -123,6 +127,7 @@ pub fn decode(reader: *DNSReader) !Name {
     var parse_offset: usize = reader.reader.seek; // Follows pointers
     var reader_offset: usize = reader.reader.seek; // Tracks read progress
     var write_pos: usize = 0;
+    var label_pos: usize = 0;
     var jumps: usize = 0;
 
     while ((write_pos < MAX_NAME_BUFFER) and (parse_offset < end) and (jumps < 10)) {
@@ -141,7 +146,11 @@ pub fn decode(reader: *DNSReader) !Name {
                 const length = header.len;
                 // We hit the root label
                 if (length == 0) {
-                    return name;
+                    result._data[write_pos] = 0;
+
+                    result._name_len = write_pos + 1;
+                    result._labels_len = label_pos;
+                    return result;
                     // Individual label is too long (not really possible with our)
                     // 6 bit length
                 } else if (length > 63) {
@@ -149,11 +158,9 @@ pub fn decode(reader: *DNSReader) !Name {
                     // Normal label
                 } else {
                     const buf = buffer[parse_offset + 1 .. parse_offset + 1 + length];
-                    name._data[write_pos] = length;
-                    @memcpy(name._data[write_pos + 1 .. write_pos + length + 1], buf);
-                    name.name.len += length + 1;
-                    name._labels[name.labels.len] = length;
-                    name.labels.len += 1;
+                    result._data[write_pos] = length;
+                    @memcpy(result._data[write_pos + 1 .. write_pos + length + 1], buf);
+                    result._labels[label_pos] = @intCast(write_pos);
 
                     // Only take if we're still following a non-pointer name
                     if (parse_offset == reader_offset) {
@@ -163,6 +170,7 @@ pub fn decode(reader: *DNSReader) !Name {
 
                     parse_offset += 1 + length;
                     write_pos += length + 1;
+                    label_pos += 1;
                 }
             },
             // Pointer
@@ -195,17 +203,19 @@ pub fn decode(reader: *DNSReader) !Name {
 }
 
 pub fn encodeLength(self: *const Name) usize {
-    return self.name.len;
+    return self._name_len;
 }
 
 pub inline fn label_count(self: *const Name) usize {
-    return self.labels.len;
+    return self._labels_len;
 }
 
 pub fn format(self: *const Name, writer: anytype) !void {
-    for (self.labels) |offset| {
-        const len: usize = self.name[offset];
-        const text: []const u8 = self.name[offset + 1 .. offset + len + 1];
+    const name_data = self.name();
+    const labels_data = self.labels();
+    for (labels_data) |offset| {
+        const len: usize = name_data[offset];
+        const text: []const u8 = name_data[offset + 1 .. offset + len + 1];
         try writer.print("{s}.", .{text});
     }
 }
@@ -225,7 +235,7 @@ fn getLengthFromBuffer(reader: *const DNSReader) !NameInfo {
     const buffer = reader.reader.buffer; // Get the raw response
     var offset: usize = reader.reader.seek;
     var total: usize = 0;
-    var labels: usize = 0;
+    var num_labels: usize = 0;
     var jumps: usize = 0; // Total number of pointer jumps
 
     const end = @min(reader.reader.end, buffer.len);
@@ -238,13 +248,13 @@ fn getLengthFromBuffer(reader: *const DNSReader) !NameInfo {
             0b00 => {
                 const length = header.len;
                 if (length == 0) {
-                    return .{ .bytes = total, .label_count = labels };
+                    return .{ .bytes = total, .label_count = num_labels };
                 } else if (length > 63) {
                     return error.LabelTooLong;
                 } else {
                     offset += (1 + length);
                     total += (1 + length); // Add label + '.' sep
-                    labels += 1;
+                    num_labels += 1;
                 }
             },
             // Pointer
@@ -277,8 +287,8 @@ pub fn deinit(self: *Name) void {
 const testing = std.testing;
 const t = @import("testing.zig");
 
-fn expectEqualText(expected: []const u8, name: Name) !void {
-    const buf = try std.fmt.allocPrint(testing.allocator, "{f}", .{name});
+fn expectEqualText(expected: []const u8, dns_name: Name) !void {
+    const buf = try std.fmt.allocPrint(testing.allocator, "{f}", .{dns_name});
     defer testing.allocator.free(buf);
 
     try testing.expectEqualSlices(u8, expected, buf);
@@ -304,11 +314,11 @@ test "basic decode" {
     var reader = try pool.getReader(.{ .fixed = t.data.labels.duckduckgo.encoded });
     defer reader.deinit();
 
-    var name = try Name.decode(&reader);
-    defer name.deinit();
+    var dns_name = try Name.decode(&reader);
+    defer dns_name.deinit();
 
-    try expectEqualText(t.data.labels.duckduckgo.decoded, name);
-    try testing.expectEqual(2, name.label_count()); // "duckduckgo" and "com"
+    try expectEqualText(t.data.labels.duckduckgo.decoded, dns_name);
+    try testing.expectEqual(2, dns_name.label_count()); // "duckduckgo" and "com"
 }
 
 const compressed_data = &[_]u8{ 0xcd, 0xa4, 0x05, 0x1, 0x2, 0x3, 0x4, 0x5, 0x03, 0xaa, 0xbb, 0xcc, 0x04, 0x1a, 0x2b, 0x3c, 0x4d, 0x00, 0x02, 0xab, 0xcd, 0xc0, 0x02 };
@@ -354,21 +364,21 @@ test "decode of simple compression" {
     try testing.expectEqual(0x0501, try reader.reader.peekInt(u16, .big));
 
     {
-        var name = try Name.decode(&reader);
-        defer name.deinit();
+        var dns_name = try Name.decode(&reader);
+        defer dns_name.deinit();
 
         const expected = &[_]u8{ 0x1, 0x2, 0x3, 0x4, 0x5, '.', 0xaa, 0xbb, 0xcc, '.', 0x1a, 0x2b, 0x3c, 0x4d, '.' };
-        try expectEqualText(expected, name);
+        try expectEqualText(expected, dns_name);
     }
 
     try testing.expectEqual(0x02ab, try reader.reader.peekInt(u16, .big));
 
     {
-        var name = try Name.decode(&reader);
-        defer name.deinit();
+        var dns_name = try Name.decode(&reader);
+        defer dns_name.deinit();
 
         const expected = &[_]u8{ 0xab, 0xcd, '.', 0x1, 0x2, 0x3, 0x4, 0x5, '.', 0xaa, 0xbb, 0xcc, '.', 0x1a, 0x2b, 0x3c, 0x4d, '.' };
-        try expectEqualText(expected, name);
+        try expectEqualText(expected, dns_name);
     }
 }
 
@@ -401,19 +411,19 @@ test "basic encode" {
 }
 
 test "fromStr with root domain" {
-    var name = try Name.fromStr("example.com.");
-    defer name.deinit();
+    var dns_name = try Name.fromStr("example.com.");
+    defer dns_name.deinit();
 
-    try expectEqualText("example.com.", name);
-    try testing.expectEqual(2, name.label_count()); // "example" and "com"
+    try expectEqualText("example.com.", dns_name);
+    try testing.expectEqual(2, dns_name.label_count()); // "example" and "com"
 }
 
 test "fromStr without root domain" {
-    var name = try Name.fromStr("example.com");
-    defer name.deinit();
+    var dns_name = try Name.fromStr("example.com");
+    defer dns_name.deinit();
 
-    try expectEqualText("example.com.", name);
-    try testing.expectEqual(2, name.label_count()); // "example" and "com"
+    try expectEqualText("example.com.", dns_name);
+    try testing.expectEqual(2, dns_name.label_count()); // "example" and "com"
 }
 
 // test "pointer encode, no prefix" {
@@ -468,10 +478,10 @@ test "encode length" {
     defer pool.deinit();
 
     {
-        var name = try Name.fromStr("example.com.");
-        defer name.deinit();
+        var dns_name = try Name.fromStr("example.com.");
+        defer dns_name.deinit();
 
-        try testing.expectEqual(13, name.encodeLength());
+        try testing.expectEqual(13, dns_name.encodeLength());
     }
 
     // TODO add this back
@@ -479,16 +489,16 @@ test "encode length" {
     //     var target = try Name.fromStr("example.com.");
     //     defer target.deinit();
     //
-    //     var name = try Name.fromPtr(&pool, "schmaple", &target);
-    //     defer name.deinit();
+    //     var dns_name = try Name.fromPtr(&pool, "schmaple", &target);
+    //     defer dns_name.deinit();
     //
-    //     try testing.expectEqual(11, name.encodeLength());
+    //     try testing.expectEqual(11, dns_name.encodeLength());
     // }
 
     {
-        var name = try Name.fromStr(".");
-        defer name.deinit();
+        var dns_name = try Name.fromStr(".");
+        defer dns_name.deinit();
 
-        try testing.expectEqual(1, name.encodeLength());
+        try testing.expectEqual(1, dns_name.encodeLength());
     }
 }
