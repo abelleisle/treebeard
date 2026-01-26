@@ -40,22 +40,26 @@ _name_len: usize,
 /// Number of labels stored in _labels.
 _labels_len: usize,
 
-/// Get the name data as a slice.
-pub fn name(self: *const Name) []const u8 {
-    return self._data[0..self._name_len];
-}
-
-/// Get the label offsets as a slice.
-pub fn labels(self: *const Name) []const u8 {
-    return self._labels[0..self._labels_len];
-}
+//--------------------------------------------------
+// Subtypes
 
 /// Label header/type
-/// From: https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-10
 const LabelHeader = packed struct(u8) {
     len: u6,
     type: u2,
 };
+
+/// Info about the Name.
+const NameInfo = struct {
+    /// Length of name in bytes (including root domain).
+    bytes: usize,
+
+    /// How many labels is this name made up of?
+    label_count: usize,
+};
+
+//--------------------------------------------------
+// Decoding functions
 
 /// Create an encoded DNS name from human readable string
 pub fn fromStr(domain: []const u8) !Name {
@@ -69,8 +73,8 @@ pub fn fromStr(domain: []const u8) !Name {
     var offset: usize = 0;
     var num_labels: usize = 0;
 
-    var iter = std.mem.splitScalar(u8, domain, '.');
-    while (iter.next()) |label| {
+    var i = std.mem.splitScalar(u8, domain, '.');
+    while (i.next()) |label| {
         if (offset > domain.len) {
             return error.InvalidName;
         }
@@ -102,15 +106,6 @@ pub fn fromStr(domain: []const u8) !Name {
     result._labels_len = num_labels;
 
     return result;
-}
-
-/// Encodes the provided name following the DNS NAME encoding spec
-pub fn encode(self: *const Name, writer: *DNSWriter) !void {
-    const name_data = self.name();
-    const written_len = try writer.writer.write(name_data);
-    if (written_len != name_data.len) {
-        return error.NotEnoughBytes;
-    }
 }
 
 pub fn decode(reader: *DNSReader) !Name {
@@ -202,32 +197,30 @@ pub fn decode(reader: *DNSReader) !Name {
     return error.NameTooLong;
 }
 
-pub fn encodeLength(self: *const Name) usize {
-    return self._name_len;
-}
+//--------------------------------------------------
+// Encoding functions
 
-pub inline fn label_count(self: *const Name) usize {
-    return self._labels_len;
-}
-
-pub fn format(self: *const Name, writer: anytype) !void {
+/// Encodes the provided name following the DNS NAME encoding spec
+pub fn encode(self: *const Name, writer: *DNSWriter) !void {
     const name_data = self.name();
-    const labels_data = self.labels();
-    for (labels_data) |offset| {
-        const len: usize = name_data[offset];
-        const text: []const u8 = name_data[offset + 1 .. offset + len + 1];
-        try writer.print("{s}.", .{text});
+    const written_len = try writer.writer.write(name_data);
+    if (written_len != name_data.len) {
+        return error.NotEnoughBytes;
     }
 }
 
-/// Info about the Name.
-const NameInfo = struct {
-    /// Length of name in bytes (including root domain).
-    bytes: usize,
-
-    /// How many labels is this name made up of?
-    label_count: usize,
-};
+pub fn format(self: *const Name, writer: anytype) !void {
+    // Root only name
+    if (self._labels_len == 0) {
+        try writer.print(".", .{});
+        // Multi-label domain
+    } else {
+        var i = self.iter();
+        while (i.next()) |label| {
+            try writer.print("{s}.", .{label});
+        }
+    }
+}
 
 /// Get the length and label count of the provided name without consuming the buffer.
 /// This can be used to determine the buffer length required for `getStrFromBuffer`.
@@ -282,6 +275,100 @@ pub fn deinit(self: *Name) void {
 }
 
 //--------------------------------------------------
+// Misc functions
+
+/// Get the name data as a slice.
+pub fn name(self: *const Name) []const u8 {
+    return self._data[0..self._name_len];
+}
+
+/// Get the label offsets as a slice.
+pub fn labels(self: *const Name) []const u8 {
+    return self._labels[0..self._labels_len];
+}
+
+/// Length of encoded name
+pub fn encodeLength(self: *const Name) usize {
+    return self._name_len;
+}
+
+/// Number of labels (excluding root label)
+pub inline fn labelCount(self: *const Name) usize {
+    return self._labels_len;
+}
+
+//--------------------------------------------------
+// Iterator
+
+pub const Iterator = struct {
+    name: *const Name,
+    forward: bool,
+    idx: ?usize,
+
+    pub fn next(self: *Iterator) ?[]const u8 {
+        // We've started iterating, go to the
+        // next index.
+        if (self.idx) |*idx| {
+            // Iterating from sub to root (->)
+            if (self.forward) {
+                if (idx.* < (self.name._labels_len - 1)) {
+                    idx.* += 1;
+                } else {
+                    return null;
+                }
+                // Iterating from root to sub (<-)
+            } else {
+                if (idx.* > 0) {
+                    idx.* -= 1;
+                } else {
+                    return null;
+                }
+            }
+
+            // This is our first time calling `next()`.
+            // Set idx.
+        } else {
+            if (self.name._labels_len > 0) {
+                if (self.forward) {
+                    self.idx = 0;
+                } else {
+                    self.idx = self.name._labels_len - 1;
+                }
+            } else {
+                return null;
+            }
+        }
+
+        // Return slice pointing to label
+        const offset = self.name._labels[self.idx.?];
+        const len = self.name._data[offset];
+        return self.name._data[offset + 1 .. offset + len + 1];
+    }
+};
+
+/// Get label iterator.
+///
+/// Can be used to iterate through labels (text).
+pub fn iter(self: *const Name) Iterator {
+    return Iterator{
+        .name = self,
+        .forward = true,
+        .idx = null,
+    };
+}
+
+/// Get reversed label iterator.
+///
+/// Can be used to iterate through labels, starting from root.
+pub fn iterReverse(self: *const Name) Iterator {
+    return Iterator{
+        .name = self,
+        .forward = false,
+        .idx = null,
+    };
+}
+
+//--------------------------------------------------
 // Tests
 
 const testing = std.testing;
@@ -318,7 +405,7 @@ test "basic decode" {
     defer dns_name.deinit();
 
     try expectEqualText(t.data.labels.duckduckgo.decoded, dns_name);
-    try testing.expectEqual(2, dns_name.label_count()); // "duckduckgo" and "com"
+    try testing.expectEqual(2, dns_name.labelCount()); // "duckduckgo" and "com"
 }
 
 const compressed_data = &[_]u8{ 0xcd, 0xa4, 0x05, 0x1, 0x2, 0x3, 0x4, 0x5, 0x03, 0xaa, 0xbb, 0xcc, 0x04, 0x1a, 0x2b, 0x3c, 0x4d, 0x00, 0x02, 0xab, 0xcd, 0xc0, 0x02 };
@@ -415,7 +502,7 @@ test "fromStr with root domain" {
     defer dns_name.deinit();
 
     try expectEqualText("example.com.", dns_name);
-    try testing.expectEqual(2, dns_name.label_count()); // "example" and "com"
+    try testing.expectEqual(2, dns_name.labelCount()); // "example" and "com"
 }
 
 test "fromStr without root domain" {
@@ -423,7 +510,15 @@ test "fromStr without root domain" {
     defer dns_name.deinit();
 
     try expectEqualText("example.com.", dns_name);
-    try testing.expectEqual(2, dns_name.label_count()); // "example" and "com"
+    try testing.expectEqual(2, dns_name.labelCount()); // "example" and "com"
+}
+
+test "fromStr root domain only" {
+    var dns_name = try Name.fromStr(".");
+    defer dns_name.deinit();
+
+    try expectEqualText(".", dns_name);
+    try testing.expectEqual(0, dns_name.labelCount()); // no labels (only root)
 }
 
 // test "pointer encode, no prefix" {
@@ -500,5 +595,73 @@ test "encode length" {
         defer dns_name.deinit();
 
         try testing.expectEqual(1, dns_name.encodeLength());
+    }
+}
+
+test "iter basic" {
+    {
+        const n = try Name.fromStr("example.com");
+        var i = n.iter();
+
+        try testing.expectEqual(null, i.idx);
+        try testing.expectEqual(true, i.forward);
+
+        const a = i.next() orelse unreachable;
+        try testing.expectEqual(0, i.idx.?);
+        try testing.expectEqualStrings("example", a);
+
+        const b = i.next() orelse unreachable;
+        try testing.expectEqual(1, i.idx.?);
+        try testing.expectEqualStrings("com", b);
+
+        const c = i.next();
+        try testing.expectEqual(1, i.idx.?); // We don't increase idx
+        try testing.expectEqual(null, c);
+    }
+
+    {
+        const n = try Name.fromStr(".");
+        var i = n.iter();
+
+        try testing.expectEqual(null, i.idx);
+        try testing.expectEqual(true, i.forward);
+
+        const a = i.next();
+        try testing.expectEqual(null, i.idx);
+        try testing.expectEqual(null, a);
+    }
+}
+
+test "reverse iter" {
+    {
+        const n = try Name.fromStr("example.com");
+        var i = n.iterReverse();
+
+        try testing.expectEqual(null, i.idx);
+        try testing.expectEqual(false, i.forward);
+
+        const a = i.next() orelse unreachable;
+        try testing.expectEqual(1, i.idx.?);
+        try testing.expectEqualStrings("com", a);
+
+        const b = i.next() orelse unreachable;
+        try testing.expectEqual(0, i.idx.?);
+        try testing.expectEqualStrings("example", b);
+
+        const c = i.next();
+        try testing.expectEqual(0, i.idx.?); // We don't decrease idx
+        try testing.expectEqual(null, c);
+    }
+
+    {
+        const n = try Name.fromStr(".");
+        var i = n.iterReverse();
+
+        try testing.expectEqual(null, i.idx);
+        try testing.expectEqual(false, i.forward);
+
+        const a = i.next();
+        try testing.expectEqual(null, i.idx);
+        try testing.expectEqual(null, a);
     }
 }
