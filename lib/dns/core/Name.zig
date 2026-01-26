@@ -469,6 +469,37 @@ test "decode of simple compression" {
     }
 }
 
+test "decode rejects forward pointer" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    {
+        // Pointer at offset 0 points forward to offset 5 (invalid - must point backwards)
+        const forward_pointer_data = &[_]u8{
+            0xc0, 0x05, // Pointer to offset 5 (forward reference)
+            0x00, 0x00, 0x00, // Padding
+            0x03, 'c', 'o', 'm', 0x00, // Label at offset 5
+        };
+
+        var reader = try pool.getReader(.{ .fixed = forward_pointer_data });
+        defer reader.deinit();
+
+        try testing.expectError(error.InvalidPointerAddress, Name.decode(&reader));
+    }
+
+    {
+        // Pointer at offset 0 points to itself
+        const self_ref_data = &[_]u8{
+            0xc0, 0x00, // Pointer to offset 0 (self-reference)
+        };
+
+        var reader = try pool.getReader(.{ .fixed = self_ref_data });
+        defer reader.deinit();
+
+        try testing.expectError(error.InvalidPointerAddress, Name.decode(&reader));
+    }
+}
+
 test "basic encode" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
