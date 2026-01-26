@@ -336,7 +336,7 @@ test "qname parsing" {
 
     // Make sure we parsed two labels
     const qname = &question.name;
-    try testing.expectEqual(2, qname.label_count());
+    try testing.expectEqual(2, qname.labelCount());
 
     const buf = try std.fmt.allocPrint(testing.allocator, "{f}", .{qname});
     defer testing.allocator.free(buf);
