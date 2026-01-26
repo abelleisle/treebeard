@@ -496,6 +496,72 @@ test "decode rejects forward pointer" {
     }
 }
 
+test "decode rejects reserved label headers" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    var reserved_data: [9]u8 = .{
+        0x03, 'w', 'w', 'w', // Valid label "www"
+        0xc0, 'b', 'a', 'd', // Invalid: 0b01000000 header
+        0x00,
+    };
+
+    {
+        // 0b01xxxxxx (0x40-0x7F) is reserved
+        reserved_data[4] = 0x40;
+
+        var reader = try pool.getReader(.{ .fixed = &reserved_data });
+        defer reader.deinit();
+
+        try testing.expectError(error.InvalidLabelHeader, Name.decode(&reader));
+    }
+
+    {
+        // 0b10xxxxxx (0x80-0xBF) is reserved
+        reserved_data[4] = 0x80;
+
+        var reader = try pool.getReader(.{ .fixed = &reserved_data });
+        defer reader.deinit();
+
+        try testing.expectError(error.InvalidLabelHeader, Name.decode(&reader));
+    }
+}
+
+test "infinite loop rejection" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    {
+        const loop_data = &[_]u8{
+            0x03, 'w', 'w', 'w', // Valid label "www"
+            0xc0, 'b', 'a', 'd', // Point to "www"
+            0x00,
+        };
+
+        var reader = try pool.getReader(.{ .fixed = loop_data });
+        defer reader.deinit();
+
+        try testing.expectError(error.InvalidPointerAddress, Name.decode(&reader));
+    }
+
+    {
+        const loop_data = &[_]u8{
+            0x03, 'w', 'w', 'w', 0x00, // Valid label "www"
+            0xc0, 0x00, // Point to "www"
+        };
+
+        var reader = try pool.getReader(.{ .fixed = loop_data });
+        defer reader.deinit();
+
+        // Decode the www
+        const www = try Name.decode(&reader);
+        try expectEqualText("www.", www);
+
+        const ptr = try Name.decode(&reader);
+        try expectEqualText("www.", ptr);
+    }
+}
+
 test "basic encode" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
