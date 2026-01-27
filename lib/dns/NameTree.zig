@@ -4,15 +4,44 @@ const std = @import("std");
 const treebeard = @import("treebeard");
 const DNSMemory = treebeard.DNSMemory;
 const Name = treebeard.Name;
+const Record = treebeard.Record;
+const RecordList = treebeard.RecordList;
 
 //--------------------------------------------------
-// Name Tree
+// Record Tree
+pub const RecordTree = Tree(Record, .{ .deinit = recordDeinit });
+
+fn recordDeinit(ctx: *anyopaque, memory: *DNSMemory) void {
+    const self: *Record = @ptrCast(@alignCast(ctx));
+    _ = memory;
+
+    self.deinit();
+}
+
+//--------------------------------------------------
+// Request List Tree
+pub const RecordListTree = Tree(RecordList, .{ .deinit = recordListDeinit });
+
+fn recordListDeinit(ctx: *anyopaque, memory: *DNSMemory) void {
+    const self: *RecordList = @ptrCast(@alignCast(ctx));
+
+    for (self.items) |*record| record.deinit();
+    self.deinit(memory.alloc());
+}
+
+//--------------------------------------------------
+// Tree
+
+const VTable = struct {
+    deinit: ?*const fn (*anyopaque, memory: *DNSMemory) void,
+};
 
 /// Name Tree. Used to create a DNS name tree broken down
 /// by labels. This is used very heavily in DNS systems.
-pub fn NameTree(comptime T: type) type {
+fn Tree(comptime T: type, vTable: VTable) type {
     return struct {
         const NT = @This();
+        const vtable: VTable = vTable;
 
         key: []u8,
         value: ?T,
@@ -90,16 +119,11 @@ pub fn NameTree(comptime T: type) type {
 
             self.memory.alloc().free(self.key);
 
-            // Can our value type have declarations?
-            const hasChildren =
-                (@typeInfo(T) == .@"struct") or
-                (@typeInfo(T) == .@"enum") or
-                (@typeInfo(T) == .@"union") or
-                (@typeInfo(T) == .@"opaque");
-
-            // If our value type has a "deinit" field, we should call it.
-            if (hasChildren and @hasDecl(T, "deinit")) {
-                if (self.value) |*value| value.deinit();
+            // Deinit the value object
+            if (self.value) |*value| {
+                if (vTable.deinit) |di| {
+                    di(value, self.memory);
+                }
             }
 
             if (self.children) |*c| {
@@ -137,7 +161,7 @@ test "creating tree" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try NameTree(i32).init(&pool, ".", null);
+    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", null);
     defer tree.deinit();
 }
 
@@ -145,7 +169,7 @@ test "add node" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try NameTree(i32).init(&pool, ".", null);
+    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", null);
     defer tree.deinit();
 
     var com = try tree.addChild("com", null);
@@ -162,16 +186,17 @@ test "deinit node" {
     const Zone = struct {
         value: []u8,
 
-        pub fn deinit(self: *@This()) void {
-            testing.allocator.free(self.value);
+        pub fn deinit(ctx: *anyopaque, memory: *DNSMemory) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            memory.alloc().free(self.value);
         }
     };
 
     const zone = Zone{
-        .value = try std.testing.allocator.alloc(u8, 1024),
+        .value = try pool.alloc().alloc(u8, 1024),
     };
 
-    var tree = try NameTree(Zone).init(&pool, ".", null);
+    var tree = try Tree(Zone, .{ .deinit = Zone.deinit }).init(&pool, ".", null);
     defer tree.deinit();
 
     var com = try tree.addChild("com", zone);
