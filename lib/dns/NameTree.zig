@@ -177,3 +177,5 @@ test "deinit node" {
     var com = try tree.addChild("com", zone);
     defer com.deinit();
 }
+
+test "find depth" {}
