@@ -15,9 +15,14 @@ pub const Question = @import("core/Question.zig");
 pub const Name = @import("core/Name.zig");
 pub const Record = @import("core/Record.zig");
 
+pub const RecordList = std.array_list.Aligned(Record, null);
+
 pub const DNSMemory = @import("pool.zig").DNSMemory;
 pub const DNSReader = @import("pool.zig").DNSReader;
 pub const DNSWriter = @import("pool.zig").DNSWriter;
+
+pub const NameTree = @import("NameTree.zig");
+pub const Zone = @import("Zone.zig");
 
 //--------------------------------------------------
 // Local imports
@@ -55,4 +60,5 @@ test {
     _ = @import("core/codes.zig");
     _ = @import("pool.zig");
     _ = @import("NameTree.zig");
+    _ = @import("Zone.zig");
 }
