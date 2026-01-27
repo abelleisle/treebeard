@@ -16,7 +16,9 @@ const Name = treebeard.Name;
 const Zone = @This();
 
 inner: *anyopaque,
-pool: *DNSMemory,
+memory: *DNSMemory,
+
+context: Name,
 
 vtable: *const VTable,
 
@@ -25,6 +27,9 @@ pub const VTable = struct {
     ///
     /// Returns a list of found records.
     query: *const fn (*anyopaque, name: *const Name, dnsType: Type, class: Class) Errors!?*RecordList,
+
+    /// Deinit the inner zone backend.
+    deinit: *const fn (*anyopaque, memory: *DNSMemory) void,
 };
 
 pub fn query(self: *const Zone, name: *const Name, dnsType: Type, class: Class) Errors!?*RecordList {
@@ -33,6 +38,11 @@ pub fn query(self: *const Zone, name: *const Name, dnsType: Type, class: Class) 
     };
 
     return result;
+}
+
+pub fn deinit(self: *const Zone) void {
+    self.vtable.deinit(self.inner, self.memory);
+    self.context.deinit();
 }
 
 pub const Errors = error{

@@ -23,13 +23,11 @@ records: struct {
     // DNS Class
     IN: struct {
         // DNS Record Type
-        A: NameTree.NameTree(RecordList),
-        AAAA: NameTree.NameTree(RecordList),
-        CNAME: NameTree.NameTree(Record),
+        A: NameTree.RecordListTree,
+        AAAA: NameTree.RecordListTree,
+        CNAME: NameTree.RecordTree,
     },
 },
-
-context: Name,
 
 pub fn init(
     memory: *DNSMemory,
@@ -39,20 +37,27 @@ pub fn init(
         .context = context,
         .records = .{
             .IN = .{
-                .A = try NameTree.NameTree(RecordList).init(memory, "@", null),
-                .AAAA = try NameTree.NameTree(RecordList).init(memory, "@", null),
-                .CNAME = try NameTree.NameTree(Record).init(memory, "@", null),
+                .A = try NameTree.RecordListTree.init(memory, "@", null),
+                .AAAA = try NameTree.RecordListTree.init(memory, "@", null),
+                .CNAME = try NameTree.RecordTree.init(memory, "@", null),
             },
         },
     };
 }
 
-pub fn deinit(self: *Self, memory: *DNSMemory) void {
-    self.context.deinit();
+pub fn deinit(ctx: *anyopaque, memory: *DNSMemory) void {
+    const self: *Self = @ptrCast(@alignCast(ctx));
+    _ = memory;
+
+    self.records.IN.A.deinit();
+    self.records.IN.AAAA.deinit();
+    self.records.IN.CNAME.deinit();
 }
 
 pub fn query(ctx: *anyopaque, name: *const Name, dnsType: Type, class: Class) Zone.Errors!?*RecordList {
     const self: *Self = @ptrCast(@alignCast(ctx));
+    _ = self;
+    _ = name;
     switch (class) {
         .IN => switch (dnsType) {
             .A => {},
