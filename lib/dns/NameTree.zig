@@ -152,8 +152,11 @@ fn Tree(comptime T: type, vTable: VTable) type {
             return deepest.tree;
         }
 
-        pub fn findContext(self: *const NT, name: *const Name, context: *const Name) *const NT {
-            var iter = try name.iterContext(context);
+        pub fn findContext(self: *const NT, name: *const Name, context: *const Name) !*const NT {
+            var iter = try name.iterContext(context) orelse {
+                // Exact domain match - return self (root of this tree)
+                return self;
+            };
             var depth = TreeLoc{
                 .depth = 0,
                 .tree = self,

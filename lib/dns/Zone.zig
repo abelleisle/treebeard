@@ -27,7 +27,7 @@ pub const CustomVTable = struct {
     /// Query our DNS zone to get a list of records.
     ///
     /// Returns a list of found records.
-    query: *const fn (*anyopaque, name: *const Name, dnsType: Type, class: Class) Errors!?*RecordList,
+    query: *const fn (*anyopaque, name: *const Name, dnsType: Type, class: Class) Errors!?*const RecordList,
 
     /// Deinit the inner zone backend.
     deinit: *const fn (*anyopaque, memory: *DNSMemory) void,
@@ -50,19 +50,19 @@ pub fn initDict(memory: *DNSMemory, context: Name) !Zone {
 
 /// De-init a DNS Zone.
 /// Will call the appropriate backend deinit function
-pub fn deinit(self: *const Zone) void {
+pub fn deinit(self: *Zone) void {
     switch (self.backend) {
-        .dict => |d| d.deinit(),
-        .custom => |c| c.vtable.deinit(c, self.memory),
+        .dict => |*d| d.deinit(),
+        .custom => |*c| c.vtable.deinit(c, self.memory),
     }
 
     self.context.deinit();
 }
 
-pub fn query(self: *const Zone, name: *const Name, dnsType: Type, class: Class) Errors!?*RecordList {
+pub fn query(self: *const Zone, name: *const Name, dnsType: Type, class: Class) Errors!?*const RecordList {
     switch (self.backend) {
         .dict => |d| {
-            const result = d.query(name, dnsType, class) catch |err| {
+            const result = d.query(name, &self.context, dnsType, class) catch |err| {
                 return err;
             };
 
