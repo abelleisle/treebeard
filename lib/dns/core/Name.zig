@@ -200,10 +200,9 @@ pub fn decode(reader: *DNSReader) !Name {
         }
     }
 
-    std.debug.print("Parse: {d}, end: {d}\n", .{ parse_offset, end });
-
+    // This typically happens if the decoded buf has no root label
     if (parse_offset >= end) {
-        return error.LabelHeaderOverrun;
+        return error.NoRootLabel;
     }
     return error.NameTooLong;
 }
