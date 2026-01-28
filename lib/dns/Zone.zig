@@ -11,18 +11,19 @@ const Type = treebeard.Type;
 const Class = treebeard.Class;
 const Name = treebeard.Name;
 
+// Backends
+const Dict = @import("zone/dict.zig");
+
 //--------------------------------------------------
 // Zone
 const Zone = @This();
 
-inner: *anyopaque,
-memory: *DNSMemory,
+const Backend = union(enum) { dict: Dict, custom: struct {
+    inner: *anyopaque,
+    vtable: *const CustomVTable,
+} };
 
-context: Name,
-
-vtable: *const VTable,
-
-pub const VTable = struct {
+pub const CustomVTable = struct {
     /// Query our DNS zone to get a list of records.
     ///
     /// Returns a list of found records.
@@ -32,17 +33,49 @@ pub const VTable = struct {
     deinit: *const fn (*anyopaque, memory: *DNSMemory) void,
 };
 
-pub fn query(self: *const Zone, name: *const Name, dnsType: Type, class: Class) Errors!?*RecordList {
-    const result = self.vtable.query(self.inner, name, dnsType, class) catch |err| {
-        return err;
-    };
+backend: Backend,
 
-    return result;
+memory: *DNSMemory,
+
+context: Name,
+
+/// Create a DNS Zone using a dictionary based backend
+pub fn initDict(memory: *DNSMemory, context: Name) !Zone {
+    return Zone{
+        .backend = .{ .dict = try Dict.init(memory) },
+        .memory = memory,
+        .context = context,
+    };
 }
 
+/// De-init a DNS Zone.
+/// Will call the appropriate backend deinit function
 pub fn deinit(self: *const Zone) void {
-    self.vtable.deinit(self.inner, self.memory);
+    switch (self.backend) {
+        .dict => |d| d.deinit(),
+        .custom => |c| c.vtable.deinit(c, self.memory),
+    }
+
     self.context.deinit();
+}
+
+pub fn query(self: *const Zone, name: *const Name, dnsType: Type, class: Class) Errors!?*RecordList {
+    switch (self.backend) {
+        .dict => |d| {
+            const result = d.query(name, dnsType, class) catch |err| {
+                return err;
+            };
+
+            return result;
+        },
+        .custom => |c| {
+            const result = c.vtable.query(c.inner, name, dnsType, class) catch |err| {
+                return err;
+            };
+
+            return result;
+        },
+    }
 }
 
 pub const Errors = error{
