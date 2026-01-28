@@ -488,7 +488,7 @@ pub fn iterContext(sub: *const Name, context: *const Name) !?Iterator {
     // Our subdomain can't have fewer labels than our context
     //
     // example.com cannot be a (sub)domain of site.example.com
-    if (sub.labelCount() < context.labelCount()) return null;
+    if (sub.labelCount() < context.labelCount()) return error.NotASubdomain;
 
     var subIter = sub.iterReverse();
     var contextIter = context.iterReverse();
@@ -1278,8 +1278,8 @@ test "iterContext basic" {
         const sub = try Name.fromStr("com");
         const context = try Name.fromStr("example.com");
 
-        const maybeIter = try sub.iterContext(&context);
-        try testing.expectEqual(null, maybeIter);
+        const result = sub.iterContext(&context);
+        try testing.expectError(error.NotASubdomain, result);
     }
 
     // Single label subdomain of single label context
