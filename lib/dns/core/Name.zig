@@ -876,6 +876,7 @@ test "name validate - total length too long" {
     const invalid_name = Name.fromStr(invalid_str);
     try testing.expectError(error.NameTooLong, invalid_name);
 
+    // Ensure exactly 254 non-root bytes can get stored but not 255
     {
         // We can only store 254 non-root bytes
         const one_too_long =
@@ -897,6 +898,7 @@ test "name validate - total length too long" {
         try testing.expectEqual(255, close_but_no_cigar_name.name().len);
     }
 
+    // Same as above, but test wire decoding
     {
         var pool = try DNSMemory.init();
         defer pool.deinit();
@@ -935,5 +937,29 @@ test "name validate - total length too long" {
         try testing.expectEqual(8, close_but_no_cigar_name.labelCount());
         // Includes root label length
         try testing.expectEqual(255, close_but_no_cigar_name.name().len);
+    }
+
+    // Test to make sure our wire encoded names have a root label
+    {
+        var pool = try DNSMemory.init();
+        defer pool.deinit();
+
+        const no_root_str =
+            "\x1Faaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ++ // 32
+            "\x1Fbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ++ // 64
+            "\x1Fccccccccccccccccccccccccccccccc" ++ // 96
+            "\x1Fddddddddddddddddddddddddddddddd" ++ // 128
+            "\x1Feeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" ++ // 160
+            "\x1Ffffffffffffffffffffffffffffffff" ++ // 192
+            "\x1Fggggggggggggggggggggggggggggggg" ++ // 224
+            "\x1D0123456789abcdef01234567890ab"; // 255
+
+        try testing.expectEqual(254, no_root_str.len);
+
+        var reader_valid = try pool.getReader(.{ .fixed = no_root_str });
+        defer reader_valid.deinit();
+        const no_root_name = Name.decode(&reader_valid);
+
+        try testing.expectError(error.NoRootLabel, no_root_name);
     }
 }
