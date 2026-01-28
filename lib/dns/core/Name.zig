@@ -273,6 +273,26 @@ pub fn deinit(self: *Name) void {
 //--------------------------------------------------
 // Misc functions
 
+/// Validate that this name is valid as per RFC1035
+fn validate(self: *const Name) !void {
+    var i = self.iterReverse();
+    while (i.next()) |label| {
+        // Wildcard labels must be the first label
+        // e.g. `*.example.com` is valid
+        //      `sub.*.example.com` is invalid
+        if ((std.mem.eql(u8, "*", label)) and (!i.last())) {
+            return error.WildcardNotFirst;
+        }
+
+        // We should have already done this above
+        // but it doesn't hurt to check again
+        // TODO remove this for efficiency reasons, gotta shave cycles
+        if (label.len > MAX_LABEL_LENGTH) {
+            return error.LabelTooLong;
+        }
+    }
+}
+
 /// Get the name data as a slice.
 pub fn name(self: *const Name) []const u8 {
     return self._data[0..self._name_len];
@@ -339,6 +359,23 @@ pub const Iterator = struct {
         const offset = self.name._labels[self.idx.?];
         const len = self.name._data[offset];
         return self.name._data[offset + 1 .. offset + len + 1];
+    }
+
+    /// Is the iterator pointing to the last item in the list?
+    ///
+    /// Note: This obeys iteration direction. This is `true` if
+    /// the next call to `next` will return `null` AND iteration
+    /// has already begun.
+    pub fn last(self: *const Iterator) bool {
+        if (self.idx) |idx| {
+            if (self.forward) {
+                return idx >= (self.name._labels_len - 1);
+            } else {
+                return idx == 0;
+            }
+        } else {
+            return false;
+        }
     }
 };
 
