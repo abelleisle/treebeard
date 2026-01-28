@@ -388,6 +388,15 @@ pub const Iterator = struct {
         return self.name._data[offset + 1 .. offset + len + 1];
     }
 
+    // Go back to the previous value
+    pub fn prev(self: *Iterator) ?[]const u8 {
+        self.forward = !self.forward;
+        const result = self.next();
+        self.forward = !self.forward;
+
+        return result;
+    }
+
     /// Is the iterator pointing to the last item in the list?
     ///
     /// Note: This obeys iteration direction. This is `true` if
@@ -426,6 +435,47 @@ pub fn iterReverse(self: *const Name) Iterator {
         .forward = false,
         .idx = null,
     };
+}
+
+/// Get reverse label iterator for iterating through a context.
+///
+/// Example use: Iterate through the subdomains of a zone.
+/// e.g. web.site.example.com -> iterContext("example.com")
+///                                       |
+///                                       v
+///                                    web.site
+///                                          ^ Iterator points here
+///                                             <- Iterates this way
+///
+/// If the target name is an exact domin of the context, `null` is returned.
+/// If the target name is not a subdomain at all, error.NotASubdomain is
+/// returned.
+pub fn iterContext(sub: *const Name, context: *const Name) !?Iterator {
+    // Our subdomain can't have fewer labels than our context
+    //
+    // example.com cannot be a (sub)domain of site.example.com
+    if (sub.labelCount() < context.labelCount) return null;
+
+    var subIter = sub.iterReverse();
+    var contextIter = context.iterReverse();
+
+    while (contextIter.next()) |contextLabel| {
+        if (std.mem.eql(u8, contextLabel, "*")) {
+            return subIter;
+        }
+
+        if (subIter.next()) |subLabel| {
+            if (std.mem.eql(u8, contextLabel, subLabel)) {
+                continue;
+            } else {
+                return error.NotASubdomain;
+            }
+        } else {
+            unreachable;
+        }
+    }
+
+    return subIter;
 }
 
 //--------------------------------------------------
