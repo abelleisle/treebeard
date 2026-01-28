@@ -69,6 +69,7 @@ pub fn fromStr(domain: []const u8) !Name {
         ._name_len = 0,
         ._labels_len = 0,
     };
+    errdefer result.deinit();
 
     var offset: usize = 0;
     var num_labels: usize = 0;
@@ -79,9 +80,10 @@ pub fn fromStr(domain: []const u8) !Name {
             return error.InvalidName;
         }
 
-        if (label.len > MAX_LABEL_LENGTH) {
-            return error.LabelTooLong;
-        } else if (label.len > 0) {
+        // Validate label, will throw error if label is invalid
+        try validateLabel(label, num_labels, offset);
+
+        if (label.len > 0) {
             if (num_labels >= MAX_LABEL_COUNT) {
                 return error.TooManyLabels;
             }
@@ -89,9 +91,9 @@ pub fn fromStr(domain: []const u8) !Name {
             result._labels[num_labels] = @intCast(offset);
             num_labels += 1;
 
+            // This is safe since we know len < 63
+            result._data[offset] = @intCast(label.len);
             // Copy label to our buffer
-            result._data[offset] = @intCast(label.len); // This is safe since
-            // we know len < 63
             @memcpy(result._data[offset + 1 .. offset + label.len + 1], label);
 
             offset += (label.len + 1);
@@ -115,6 +117,7 @@ pub fn decode(reader: *DNSReader) !Name {
         ._name_len = 0,
         ._labels_len = 0,
     };
+    errdefer result.deinit();
 
     const buffer = reader.reader.buffer;
     const end = @min(buffer.len, reader.reader.end);
@@ -151,7 +154,12 @@ pub fn decode(reader: *DNSReader) !Name {
                     return error.LabelTooLong;
                     // Normal label
                 } else {
+                    if (parse_offset + length + 1 > end) return error.LabelHeaderOverrunBuf;
                     const buf = buffer[parse_offset + 1 .. parse_offset + 1 + length];
+
+                    // Validate label, will throw error if label is invalid
+                    try validateLabel(buf, label_pos, write_pos);
+
                     result._data[write_pos] = length;
                     @memcpy(result._data[write_pos + 1 .. write_pos + length + 1], buf);
                     result._labels[label_pos] = @intCast(write_pos);
@@ -162,7 +170,7 @@ pub fn decode(reader: *DNSReader) !Name {
                         reader_offset += 1 + length;
                     }
 
-                    parse_offset += 1 + length;
+                    parse_offset += length + 1;
                     write_pos += length + 1;
                     label_pos += 1;
                 }
@@ -192,6 +200,11 @@ pub fn decode(reader: *DNSReader) !Name {
         }
     }
 
+    std.debug.print("Parse: {d}, end: {d}\n", .{ parse_offset, end });
+
+    if (parse_offset >= end) {
+        return error.LabelHeaderOverrun;
+    }
     return error.NameTooLong;
 }
 
@@ -274,21 +287,36 @@ pub fn deinit(self: *Name) void {
 // Misc functions
 
 /// Validate that this name is valid as per RFC1035
-fn validate(self: *const Name) !void {
-    var i = self.iterReverse();
-    while (i.next()) |label| {
-        // Wildcard labels must be the first label
-        // e.g. `*.example.com` is valid
-        //      `sub.*.example.com` is invalid
-        if ((std.mem.eql(u8, "*", label)) and (!i.last())) {
-            return error.WildcardNotFirst;
-        }
+fn validateLabel(label: []const u8, index: usize, currentLen: usize) !void {
+    // Check label lengths
+    if (label.len > MAX_LABEL_LENGTH) {
+        return error.LabelTooLong;
+    } else if (label.len == 0) {
+        return; // We can't validate empty labels
+    }
 
-        // We should have already done this above
-        // but it doesn't hurt to check again
-        // TODO remove this for efficiency reasons, gotta shave cycles
-        if (label.len > MAX_LABEL_LENGTH) {
-            return error.LabelTooLong;
+    // Make sure we have less than 128 labels
+    if (index >= (MAX_LABEL_COUNT - 1)) return error.TooManyLabels;
+
+    // Make sure total name length (including label headers) isn't greater than
+    // the maximum allowed name length.
+    //
+    // We need to check for (MAX_NAME_BUFFER - 2) because we need to store the
+    // root label at the end (1 byte).
+    if (1 + label.len + currentLen > (MAX_NAME_BUFFER - 1)) return error.NameTooLong;
+
+    // This label has a wildcard
+    if (std.mem.indexOf(u8, label, "*")) |pos| {
+        if (label.len == 1 and pos == 0) {
+            // Wildcard labels must be the first label
+            // e.g. `*.example.com` is valid
+            //      `sub.*.example.com` is invalid
+            if (index > 0) return error.WildcardNotFirst;
+        } else {
+            // Wildcard can't be part of a label
+            // e.g. sub*.example.com
+            //      *test.example.com
+            return error.WildcardNotAlone;
         }
     }
 }
@@ -793,5 +821,120 @@ test "reverse iter" {
         const a = i.next();
         try testing.expectEqual(null, i.idx);
         try testing.expectEqual(null, a);
+    }
+}
+
+test "name validate - wildcards" {
+    const valid = try Name.fromStr("*.example.com");
+    try testing.expectEqual(3, valid.labelCount()); // Just double check that this is a valid name
+
+    const invalidCases = .{
+        .{ .str = "sub.*.example.com", .expected = error.WildcardNotFirst },
+        .{ .str = "*.*.example.com", .expected = error.WildcardNotFirst },
+        .{ .str = "*sub.example.com", .expected = error.WildcardNotAlone },
+        .{ .str = "z*.example.com", .expected = error.WildcardNotAlone },
+    };
+
+    inline for (invalidCases) |case| {
+        const invalid = Name.fromStr(case.str);
+        try testing.expectError(case.expected, invalid);
+    }
+}
+
+test "name validate - labels too long" {
+    const label: []const u8 = "X" ** 63;
+    const valid = try Name.fromStr(label);
+    try testing.expectEqual(1, valid.labelCount());
+
+    const labelLong: []const u8 = "X" ** 64;
+    const invalid = Name.fromStr(labelLong);
+    try testing.expectError(error.LabelTooLong, invalid);
+}
+
+test "name validate - too many labels" {
+    // 127 labels should succeed
+    const labels_127 = "a." ** 127;
+    const valid = try Name.fromStr(labels_127);
+    try testing.expectEqual(127, valid.labelCount());
+
+    // MAX_LABEL_COUNT is 128 (including root), so 128 labels should fail
+    const labels_128 = "a." ** 128;
+    const invalid = Name.fromStr(labels_128);
+    try testing.expectError(error.TooManyLabels, invalid);
+}
+
+test "name validate - total length too long" {
+    // MAX_NAME_BUFFER is 255, but valid DNS names are max 253 chars + root null = 254
+    // Each "XX." adds 3 chars to the string but 3 bytes encoded (1 len + 2 chars)
+    // To exceed 255 bytes encoded, we need many labels
+    // 63 labels of "XXX" = 63 * (1 + 3) = 252 bytes + 1 root = 253 (valid)
+    // 64 labels of "XXX" = 64 * (1 + 3) = 256 bytes + 1 root = 257 (invalid)
+    const valid_str = "XXX." ** 63;
+    const valid_name = try Name.fromStr(valid_str);
+    try testing.expectEqual(63, valid_name.labelCount());
+
+    const invalid_str = "XXX." ** 64;
+    const invalid_name = Name.fromStr(invalid_str);
+    try testing.expectError(error.NameTooLong, invalid_name);
+
+    {
+        // We can only store 254 non-root bytes
+        const one_too_long =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa." ++ // 32
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb." ++ // 64
+            "ccccccccccccccccccccccccccccccc." ++ // 96
+            "ddddddddddddddddddddddddddddddd." ++ // 128
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeee." ++ // 160
+            "fffffffffffffffffffffffffffffff." ++ // 192
+            "ggggggggggggggggggggggggggggggg." ++ // 224
+            "0123456789abcdef01234567890abc"; // 255
+        const one_too_long_name = Name.fromStr(one_too_long);
+        try testing.expectError(error.NameTooLong, one_too_long_name);
+
+        const close_but_no_cigar_str = one_too_long[0..253]; // Length = 254
+        const close_but_no_cigar_name = try Name.fromStr(close_but_no_cigar_str);
+        try testing.expectEqual(8, close_but_no_cigar_name.labelCount());
+        // Includes root label length
+        try testing.expectEqual(255, close_but_no_cigar_name.name().len);
+    }
+
+    {
+        var pool = try DNSMemory.init();
+        defer pool.deinit();
+
+        // We can only store 254 non-root bytes
+        const one_too_long =
+            "\x1Faaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ++ // 32
+            "\x1Fbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ++ // 64
+            "\x1Fccccccccccccccccccccccccccccccc" ++ // 96
+            "\x1Fddddddddddddddddddddddddddddddd" ++ // 128
+            "\x1Feeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" ++ // 160
+            "\x1Ffffffffffffffffffffffffffffffff" ++ // 192
+            "\x1Fggggggggggggggggggggggggggggggg" ++ // 224
+            "\x1E0123456789abcdef01234567890abc"; // 255
+        var reader_invalid = try pool.getReader(.{ .fixed = one_too_long });
+        defer reader_invalid.deinit();
+        const one_too_long_name = Name.decode(&reader_invalid);
+        try testing.expectError(error.NameTooLong, one_too_long_name);
+
+        const close_but_no_cigar_str =
+            "\x1Faaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ++ // 32
+            "\x1Fbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ++ // 64
+            "\x1Fccccccccccccccccccccccccccccccc" ++ // 96
+            "\x1Fddddddddddddddddddddddddddddddd" ++ // 128
+            "\x1Feeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" ++ // 160
+            "\x1Ffffffffffffffffffffffffffffffff" ++ // 192
+            "\x1Fggggggggggggggggggggggggggggggg" ++ // 224
+            "\x1D0123456789abcdef01234567890ab\x00"; // 255
+
+        try testing.expectEqual(255, close_but_no_cigar_str.len);
+
+        var reader_valid = try pool.getReader(.{ .fixed = close_but_no_cigar_str });
+        defer reader_valid.deinit();
+        const close_but_no_cigar_name = try Name.decode(&reader_valid);
+
+        try testing.expectEqual(8, close_but_no_cigar_name.labelCount());
+        // Includes root label length
+        try testing.expectEqual(255, close_but_no_cigar_name.name().len);
     }
 }
