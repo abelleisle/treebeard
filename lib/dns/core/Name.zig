@@ -397,6 +397,40 @@ pub const Iterator = struct {
         return result;
     }
 
+    /// Returns the current label without advancing the iterator.
+    /// Returns null if iteration hasn't started yet (idx is null).
+    pub fn peek(self: *const Iterator) ?[]const u8 {
+        const idx = self.idx orelse return null;
+        const offset = self.name._labels[idx];
+        const len = self.name._data[offset];
+        return self.name._data[offset + 1 .. offset + len + 1];
+    }
+
+    /// Returns the next label without advancing the iterator.
+    /// If iteration hasn't started, returns the first element.
+    pub fn peekNext(self: *const Iterator) ?[]const u8 {
+        const next_idx: usize = if (self.idx) |idx| blk: {
+            if (self.forward) {
+                if (idx >= self.name._labels_len - 1) return null;
+                break :blk idx + 1;
+            } else {
+                if (idx == 0) return null;
+                break :blk idx - 1;
+            }
+        } else blk: {
+            if (self.name._labels_len == 0) return null;
+            if (self.forward) {
+                break :blk 0;
+            } else {
+                break :blk self.name._labels_len - 1;
+            }
+        };
+
+        const offset = self.name._labels[next_idx];
+        const len = self.name._data[offset];
+        return self.name._data[offset + 1 .. offset + len + 1];
+    }
+
     /// Is the iterator pointing to the last item in the list?
     ///
     /// Note: This obeys iteration direction. This is `true` if
@@ -454,7 +488,7 @@ pub fn iterContext(sub: *const Name, context: *const Name) !?Iterator {
     // Our subdomain can't have fewer labels than our context
     //
     // example.com cannot be a (sub)domain of site.example.com
-    if (sub.labelCount() < context.labelCount) return null;
+    if (sub.labelCount() < context.labelCount()) return null;
 
     var subIter = sub.iterReverse();
     var contextIter = context.iterReverse();
@@ -474,6 +508,9 @@ pub fn iterContext(sub: *const Name, context: *const Name) !?Iterator {
             unreachable;
         }
     }
+
+    // If this happens, our domains match
+    if (subIter.peekNext() == null) return null;
 
     return subIter;
 }
@@ -1011,5 +1048,283 @@ test "name validate - total length too long" {
         const no_root_name = Name.decode(&reader_valid);
 
         try testing.expectError(error.NoRootLabel, no_root_name);
+    }
+}
+
+test "iter prev" {
+    // Test prev on forward iterator
+    {
+        const n = try Name.fromStr("www.example.com");
+        var i = n.iter();
+
+        const first = i.next().?;
+        try testing.expectEqualStrings("www", first);
+        try testing.expectEqual(0, i.idx.?);
+
+        const second = i.next().?;
+        try testing.expectEqualStrings("example", second);
+        try testing.expectEqual(1, i.idx.?);
+
+        // Now go back with prev
+        const back = i.prev().?;
+        try testing.expectEqualStrings("www", back);
+        try testing.expectEqual(0, i.idx.?);
+
+        // prev again should return null (can't go before start)
+        const before_start = i.prev();
+        try testing.expectEqual(null, before_start);
+    }
+
+    // Test prev on reverse iterator
+    {
+        const n = try Name.fromStr("www.example.com");
+        var i = n.iterReverse();
+
+        // Move backward (in reverse direction): com -> example
+        const first = i.next().?;
+        try testing.expectEqualStrings("com", first);
+        try testing.expectEqual(2, i.idx.?);
+
+        const second = i.next().?;
+        try testing.expectEqualStrings("example", second);
+        try testing.expectEqual(1, i.idx.?);
+
+        // prev on reverse iterator goes back toward root (com)
+        const back = i.prev().?;
+        try testing.expectEqualStrings("com", back);
+        try testing.expectEqual(2, i.idx.?);
+
+        // prev again should return null (can't go past end)
+        const past_end = i.prev();
+        try testing.expectEqual(null, past_end);
+    }
+
+    // Test prev before any next calls
+    // Note: prev on unstarted forward iterator returns the last label
+    // because it flips direction and calls next(), which initializes
+    // idx to the end position for reverse iteration
+    {
+        const n = try Name.fromStr("example.com");
+        var i = n.iter();
+
+        // prev on unstarted forward iterator returns last label
+        const result = i.prev();
+        try testing.expectEqualStrings("com", result.?);
+        // idx is now at the last position
+        try testing.expectEqual(1, i.idx.?);
+    }
+
+    // Test prev on root-only domain
+    {
+        const n = try Name.fromStr(".");
+        var i = n.iter();
+
+        // No labels to iterate
+        try testing.expectEqual(null, i.next());
+        try testing.expectEqual(null, i.prev());
+    }
+}
+
+test "iter peek" {
+    // peek returns current element without advancing
+    {
+        const n = try Name.fromStr("www.example.com");
+        var i = n.iter();
+
+        // peek before iteration starts returns null
+        try testing.expectEqual(null, i.peek());
+
+        // advance to first element
+        _ = i.next();
+        try testing.expectEqualStrings("www", i.peek().?);
+
+        // peek doesn't advance - calling it again returns same value
+        try testing.expectEqualStrings("www", i.peek().?);
+        try testing.expectEqual(0, i.idx.?);
+
+        // advance and peek again
+        _ = i.next();
+        try testing.expectEqualStrings("example", i.peek().?);
+        try testing.expectEqual(1, i.idx.?);
+
+        // advance to last
+        _ = i.next();
+        try testing.expectEqualStrings("com", i.peek().?);
+
+        // next returns null but peek still returns current
+        try testing.expectEqual(null, i.next());
+        try testing.expectEqualStrings("com", i.peek().?);
+    }
+
+    // peek on reverse iterator
+    {
+        const n = try Name.fromStr("www.example.com");
+        var i = n.iterReverse();
+
+        try testing.expectEqual(null, i.peek());
+
+        _ = i.next();
+        try testing.expectEqualStrings("com", i.peek().?);
+
+        _ = i.next();
+        try testing.expectEqualStrings("example", i.peek().?);
+    }
+
+    // peek on root-only domain
+    {
+        const n = try Name.fromStr(".");
+        var i = n.iter();
+
+        try testing.expectEqual(null, i.peek());
+        try testing.expectEqual(null, i.next());
+        try testing.expectEqual(null, i.peek());
+    }
+}
+
+test "iter peekNext" {
+    // peekNext returns next element without advancing
+    {
+        const n = try Name.fromStr("www.example.com");
+        var i = n.iter();
+
+        // peekNext before iteration returns first element
+        try testing.expectEqualStrings("www", i.peekNext().?);
+        try testing.expectEqual(null, i.idx); // still not started
+
+        // advance to first element
+        _ = i.next();
+        try testing.expectEqualStrings("www", i.peek().?);
+        try testing.expectEqualStrings("example", i.peekNext().?);
+        try testing.expectEqual(0, i.idx.?); // didn't advance
+
+        // advance and peekNext again
+        _ = i.next();
+        try testing.expectEqualStrings("example", i.peek().?);
+        try testing.expectEqualStrings("com", i.peekNext().?);
+
+        // advance to last - peekNext returns null
+        _ = i.next();
+        try testing.expectEqualStrings("com", i.peek().?);
+        try testing.expectEqual(null, i.peekNext());
+    }
+
+    // peekNext on reverse iterator
+    {
+        const n = try Name.fromStr("www.example.com");
+        var i = n.iterReverse();
+
+        // peekNext before iteration returns last element (first in reverse)
+        try testing.expectEqualStrings("com", i.peekNext().?);
+
+        _ = i.next();
+        try testing.expectEqualStrings("com", i.peek().?);
+        try testing.expectEqualStrings("example", i.peekNext().?);
+
+        _ = i.next();
+        try testing.expectEqualStrings("example", i.peek().?);
+        try testing.expectEqualStrings("www", i.peekNext().?);
+
+        _ = i.next();
+        try testing.expectEqualStrings("www", i.peek().?);
+        try testing.expectEqual(null, i.peekNext());
+    }
+
+    // peekNext on root-only domain
+    {
+        const n = try Name.fromStr(".");
+        const i = n.iter();
+
+        try testing.expectEqual(null, i.peekNext());
+    }
+}
+
+test "iterContext basic" {
+    // Basic subdomain case: web.site.example.com in context of example.com
+    {
+        const sub = try Name.fromStr("web.site.example.com");
+        const context = try Name.fromStr("example.com");
+
+        const maybeIter = try sub.iterContext(&context);
+        try testing.expect(maybeIter != null);
+
+        var i = maybeIter.?;
+        // Iterator should be positioned after matching "example.com"
+        // and iterate backwards through remaining labels: site, web
+        try testing.expectEqualStrings("site", i.next().?);
+        try testing.expectEqualStrings("web", i.next().?);
+        try testing.expectEqual(null, i.next());
+    }
+
+    // Exact match case: example.com in context of example.com
+    {
+        const sub = try Name.fromStr("example.com");
+        const context = try Name.fromStr("example.com");
+
+        const maybeIter = try sub.iterContext(&context);
+        try testing.expect(maybeIter == null);
+    }
+
+    // Not a subdomain: different.org is not a subdomain of example.com
+    {
+        const sub = try Name.fromStr("different.org");
+        const context = try Name.fromStr("example.com");
+
+        const result = sub.iterContext(&context);
+        try testing.expectError(error.NotASubdomain, result);
+    }
+
+    // Context has more labels than subdomain
+    {
+        const sub = try Name.fromStr("com");
+        const context = try Name.fromStr("example.com");
+
+        const maybeIter = try sub.iterContext(&context);
+        try testing.expectEqual(null, maybeIter);
+    }
+
+    // Single label subdomain of single label context
+    {
+        const sub = try Name.fromStr("www.com");
+        const context = try Name.fromStr("com");
+
+        const maybeIter = try sub.iterContext(&context);
+        try testing.expect(maybeIter != null);
+
+        var i = maybeIter.?;
+        try testing.expectEqualStrings("www", i.next().?);
+        try testing.expectEqual(null, i.next());
+    }
+}
+
+test "iterContext with wildcards" {
+    // Wildcard in context: *.example.com
+    {
+        const sub = try Name.fromStr("anything.example.com");
+        const context = try Name.fromStr("*.example.com");
+
+        const maybeIter = try sub.iterContext(&context);
+        try testing.expect(maybeIter != null);
+
+        var i = maybeIter.?;
+        // Wildcard matches, iterator returns remaining labels
+        // After matching "*.example.com", we should get "anything"
+        try testing.expectEqualStrings("anything", i.next().?);
+        try testing.expectEqual(null, i.next());
+    }
+
+    // Deep subdomain with wildcard context
+    {
+        const sub = try Name.fromStr("deep.sub.domain.example.com");
+        const context = try Name.fromStr("*.example.com");
+
+        const maybeIter = try sub.iterContext(&context);
+        try testing.expect(maybeIter != null);
+
+        var i = maybeIter.?;
+        // After matching wildcard at "domain", should get: domain, sub, deep
+        try testing.expectEqualStrings("domain", i.next().?);
+        try testing.expectEqualStrings("sub", i.next().?);
+        try testing.expectEqualStrings("deep", i.next().?);
+        try testing.expectEqual(null, i.next());
     }
 }
