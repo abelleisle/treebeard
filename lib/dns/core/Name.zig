@@ -340,6 +340,15 @@ pub inline fn labelCount(self: *const Name) usize {
     return self._labels_len;
 }
 
+/// Are our labels equal?
+pub inline fn labelEql(lhs: []const u8, rhs: []const u8) bool {
+    if (std.mem.eql(u8, rhs, "*")) {
+        return true;
+    }
+
+    return std.mem.sql(u8, lhs, rhs);
+}
+
 //--------------------------------------------------
 // Iterator
 
@@ -1291,6 +1300,20 @@ test "iterContext basic" {
         try testing.expect(maybeIter != null);
 
         var i = maybeIter.?;
+        try testing.expectEqualStrings("www", i.next().?);
+        try testing.expectEqual(null, i.next());
+    }
+
+    // Root domain context
+    {
+        const sub = try Name.fromStr("www.com");
+        const context = try Name.fromStr("");
+
+        const maybeIter = try sub.iterContext(&context);
+        try testing.expect(maybeIter != null);
+
+        var i = maybeIter.?;
+        try testing.expectEqualStrings("com", i.next().?);
         try testing.expectEqualStrings("www", i.next().?);
         try testing.expectEqual(null, i.next());
     }

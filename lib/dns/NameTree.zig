@@ -136,18 +136,49 @@ fn Tree(comptime T: type, vTable: VTable) type {
             }
         }
 
-        pub fn find(self: *const NT, name: *const Name) usize {
-            var iter = name.labels.iterReverse();
-            return self.find_inner(&iter);
+        const TreeLoc = struct {
+            depth: usize,
+            tree: *const NT,
+        };
+
+        pub fn find(self: *const NT, name: *const Name) *const NT {
+            var iter = name.iterReverse();
+            var depth = TreeLoc{
+                .depth = 0,
+                .tree = self,
+            };
+
+            const deepest = self.find_inner(&iter, &depth);
+            return deepest.tree;
         }
 
-        fn find_inner(self: *const NT, labelList: *Name.LabelList.LabelListIterator, depth: usize) usize {
-            if (labelList.next()) |label| {
-                if (self.key == label) {} else {
-                    return depth; // TODO
+        fn find_inner(self: *const NT, iter: *Name.Iterator, deepest: *TreeLoc) TreeLoc {
+            // We still have labels, keep searching
+            if (iter.next()) |label| {
+                // This tree has child trees
+                if (self.children) |children| {
+                    // There is an exact domain match in the tree beneath
+                    if (children.getPtr(label)) |found| {
+                        deepest.depth += 1;
+                        deepest.tree = found;
+                        return found.find_inner(iter, deepest);
+                        // There is a wildcard domain match in the tree beneath
+                    } else if (children.getPtr("*")) |wildfound| {
+                        deepest.depth += 1;
+                        deepest.tree = wildfound;
+                        return wildfound.find_inner(iter, deepest);
+                        // No more child trees found, we've gone as far as we can
+                    } else {
+                        return deepest;
+                    }
+                    // This tree has no children, so we have found the deepest tree
+                    // matching
+                } else {
+                    return deepest;
                 }
+                // We are out of labels, return the deepest tree we have so far
             } else {
-                return depth; // TODO
+                return deepest;
             }
         }
     };
