@@ -31,10 +31,8 @@ records: struct {
 
 pub fn init(
     memory: *DNSMemory,
-    context: Name,
 ) !Self {
     return Self{
-        .context = context,
         .records = .{
             .IN = .{
                 .A = try NameTree.RecordListTree.init(memory, "@", null),
@@ -45,17 +43,13 @@ pub fn init(
     };
 }
 
-pub fn deinit(ctx: *anyopaque, memory: *DNSMemory) void {
-    const self: *Self = @ptrCast(@alignCast(ctx));
-    _ = memory;
-
+pub fn deinit(self: *Self) void {
     self.records.IN.A.deinit();
     self.records.IN.AAAA.deinit();
     self.records.IN.CNAME.deinit();
 }
 
-pub fn query(ctx: *anyopaque, name: *const Name, dnsType: Type, class: Class) Zone.Errors!?*RecordList {
-    const self: *Self = @ptrCast(@alignCast(ctx));
+pub fn query(self: *Self, name: *const Name, dnsType: Type, class: Class) Zone.Errors!?*RecordList {
     _ = self;
     _ = name;
     switch (class) {
