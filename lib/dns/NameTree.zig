@@ -32,8 +32,16 @@ fn recordListDeinit(ctx: *anyopaque, memory: *DNSMemory) void {
 //--------------------------------------------------
 // Tree
 
+/// Tree virtual table.
+/// Used for dynamic dispatching based on the custom tree type
 const VTable = struct {
     deinit: ?*const fn (*anyopaque, memory: *DNSMemory) void,
+};
+
+const TreeKey = union(enum) {
+    str: []u8,
+    namespace: Name,
+    root,
 };
 
 /// Name Tree. Used to create a DNS name tree broken down
@@ -43,7 +51,7 @@ fn Tree(comptime T: type, vTable: VTable) type {
         const NT = @This();
         const vtable: VTable = vTable;
 
-        key: []u8,
+        key: TreeKey,
         value: ?T,
         children: ?std.StringHashMap(NT),
 
@@ -51,7 +59,38 @@ fn Tree(comptime T: type, vTable: VTable) type {
 
         memory: *DNSMemory,
 
-        /// Creates a name tree.
+        /// Creates a root-name tree.
+        ///
+        /// The parent node has no children and points to the root domain.
+        ///
+        /// Note: Initial name trees have no children.
+        pub fn init(memory: *DNSMemory) NT {
+            return NT{
+                .key = .root,
+                .value = null,
+                .children = null,
+                .memory = memory,
+                .freed = false,
+            };
+        }
+
+        /// Creates a namespace tree.
+        ///
+        /// The parent node has no children and points to the "@" key,
+        /// or the namespace of the provided domain.
+        ///
+        /// Note: Initial name trees have no children.
+        pub fn namespace(memory: *DNSMemory, name: *const Name) NT {
+            return NT{
+                .key = .{ .namespace = name.* },
+                .value = null,
+                .children = null,
+                .memory = memory,
+                .freed = false,
+            };
+        }
+
+        /// Creates a child tree.
         ///
         /// key: Name of the node. This value will be duped, so this can be
         ///      a temporary value. This should refer to a single name label
@@ -59,11 +98,9 @@ fn Tree(comptime T: type, vTable: VTable) type {
         /// value: Optional value to apply to the node.
         ///
         /// Note: Initial name trees have no children.
-        pub fn init(memory: *DNSMemory, key: []const u8, value: ?T) !NT {
-            const buf = try memory.alloc().dupe(u8, key);
-            errdefer memory.alloc().free(buf);
+        fn child(memory: *DNSMemory, key: []const u8, value: ?T) !NT {
             return NT{
-                .key = buf,
+                .key = .{ .str = try memory.alloc().dupe(u8, key) },
                 .value = value,
                 .children = null,
                 .memory = memory,
@@ -102,7 +139,7 @@ fn Tree(comptime T: type, vTable: VTable) type {
                 }
                 // No node currently exists, let's create one and add it
             } else {
-                gop.value_ptr.* = try NT.init(self.memory, key, value);
+                gop.value_ptr.* = try NT.child(self.memory, key, value);
             }
 
             // Return our obtained or placed child node
@@ -117,7 +154,12 @@ fn Tree(comptime T: type, vTable: VTable) type {
             if (self.freed) return;
             self.freed = true;
 
-            self.memory.alloc().free(self.key);
+            // Make sure the key is deinitialized
+            switch (self.key) {
+                .root => {},
+                .namespace => |*n| n.deinit(),
+                .str => |k| self.memory.alloc().free(k),
+            }
 
             // Deinit the value object
             if (self.value) |*value| {
@@ -128,8 +170,8 @@ fn Tree(comptime T: type, vTable: VTable) type {
 
             if (self.children) |*c| {
                 var iter = c.valueIterator();
-                while (iter.next()) |child| {
-                    child.deinit();
+                while (iter.next()) |childValue| {
+                    childValue.deinit();
                 }
                 c.deinit();
                 self.children = null;
@@ -142,20 +184,13 @@ fn Tree(comptime T: type, vTable: VTable) type {
         };
 
         pub fn find(self: *const NT, name: *const Name) *const NT {
-            var iter = name.iterReverse();
-            var depth = TreeLoc{
-                .depth = 0,
-                .tree = self,
-            };
-
-            const deepest = self.find_inner(&iter, &depth);
-            return deepest.tree;
-        }
-
-        pub fn findContext(self: *const NT, name: *const Name, context: *const Name) !*const NT {
-            var iter = try name.iterContext(context) orelse {
-                // Exact domain match - return self (root of this tree)
-                return self;
+            var iter = switch (self.key) {
+                .namespace => |*ns| name.iterContext(ns) catch {
+                    return self;
+                } orelse {
+                    return self;
+                },
+                else => name.iterReverse(),
             };
             var depth = TreeLoc{
                 .depth = 0,
@@ -206,7 +241,7 @@ test "creating tree" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", null);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 }
 
@@ -214,7 +249,7 @@ test "add node" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", null);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     var com = try tree.addChild("com", null);
@@ -241,7 +276,7 @@ test "deinit node" {
         .value = try pool.alloc().alloc(u8, 1024),
     };
 
-    var tree = try Tree(Zone, .{ .deinit = Zone.deinit }).init(&pool, ".", null);
+    var tree = Tree(Zone, .{ .deinit = Zone.deinit }).init(&pool);
     defer tree.deinit();
 
     var com = try tree.addChild("com", zone);
@@ -260,7 +295,7 @@ test "find - exact match" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     var com = try tree.addChild("com", 1);
@@ -280,7 +315,7 @@ test "find - exact match" {
         const name = try Name.fromStr(case.domain);
         const found = tree.find(&name);
 
-        try testing.expectEqualStrings(case.expected_key, found.key);
+        try testing.expectEqualStrings(case.expected_key, found.key.str);
         try testing.expectEqual(case.expected_value, found.value.?);
     }
 }
@@ -289,15 +324,15 @@ test "find - root only returns root" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     // Tree has no children, any lookup should return root
     const name = try Name.fromStr("anything.com");
     const found = tree.find(&name);
 
-    try testing.expectEqualStrings(".", found.key);
-    try testing.expectEqual(0, found.value.?);
+    try testing.expect(found.key == .root);
+    try testing.expectEqual(null, found.value);
 }
 
 // ----------------------------------------------------------
@@ -308,29 +343,42 @@ test "find - partial match returns deepest node" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     var com = try tree.addChild("com", 1);
     _ = try com.addChild("example", 2);
 
-    const cases = .{
-        // Name has more labels than tree depth - returns deepest match
-        .{ .domain = "www.example.com", .expected_key = "example", .expected_value = 2 },
-        // Name diverges from tree - returns last matching node
-        .{ .domain = "other.com", .expected_key = "com", .expected_value = 1 },
-        // First label doesn't match any children - returns root
-        .{ .domain = "org", .expected_key = ".", .expected_value = 0 },
-        // Completely different domain - returns root
-        .{ .domain = "www.test.org", .expected_key = ".", .expected_value = 0 },
-    };
-
-    inline for (cases) |case| {
-        const name = try Name.fromStr(case.domain);
+    // Name has more labels than tree depth - returns deepest match
+    {
+        const name = try Name.fromStr("www.example.com");
         const found = tree.find(&name);
+        try testing.expectEqualStrings("example", found.key.str);
+        try testing.expectEqual(2, found.value.?);
+    }
 
-        try testing.expectEqualStrings(case.expected_key, found.key);
-        try testing.expectEqual(case.expected_value, found.value.?);
+    // Name diverges from tree - returns last matching node
+    {
+        const name = try Name.fromStr("other.com");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("com", found.key.str);
+        try testing.expectEqual(1, found.value.?);
+    }
+
+    // First label doesn't match any children - returns root
+    {
+        const name = try Name.fromStr("org");
+        const found = tree.find(&name);
+        try testing.expect(found.key == .root);
+        try testing.expectEqual(null, found.value);
+    }
+
+    // Completely different domain - returns root
+    {
+        const name = try Name.fromStr("www.test.org");
+        const found = tree.find(&name);
+        try testing.expect(found.key == .root);
+        try testing.expectEqual(null, found.value);
     }
 }
 
@@ -338,7 +386,7 @@ test "find - graceful fallback when no match" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     // Build a specific branch
@@ -359,8 +407,8 @@ test "find - graceful fallback when no match" {
         const found = tree.find(&name);
 
         // Should always return root without error
-        try testing.expectEqualStrings(".", found.key);
-        try testing.expectEqual(0, found.value.?);
+        try testing.expect(found.key == .root);
+        try testing.expectEqual(null, found.value);
     }
 }
 
@@ -372,7 +420,7 @@ test "find - wildcard matches when exact fails" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     var com = try tree.addChild("com", 1);
@@ -389,7 +437,7 @@ test "find - wildcard matches when exact fails" {
         const name = try Name.fromStr(domain);
         const found = tree.find(&name);
 
-        try testing.expectEqualStrings("*", found.key);
+        try testing.expectEqualStrings("*", found.key.str);
         try testing.expectEqual(99, found.value.?);
     }
 }
@@ -398,7 +446,7 @@ test "find - exact match takes priority over wildcard" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     var com = try tree.addChild("com", 1);
@@ -408,13 +456,13 @@ test "find - exact match takes priority over wildcard" {
     // Exact match should be preferred
     const exact_name = try Name.fromStr("example.com");
     const exact_found = tree.find(&exact_name);
-    try testing.expectEqualStrings("example", exact_found.key);
+    try testing.expectEqualStrings("example", exact_found.key.str);
     try testing.expectEqual(100, exact_found.value.?);
 
     // Wildcard should match other domains
     const wildcard_name = try Name.fromStr("other.com");
     const wildcard_found = tree.find(&wildcard_name);
-    try testing.expectEqualStrings("*", wildcard_found.key);
+    try testing.expectEqualStrings("*", wildcard_found.key.str);
     try testing.expectEqual(99, wildcard_found.value.?);
 }
 
@@ -422,7 +470,7 @@ test "find - nested under wildcard" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     var com = try tree.addChild("com", 1);
@@ -432,13 +480,13 @@ test "find - nested under wildcard" {
     // Direct wildcard match
     const direct_name = try Name.fromStr("anything.com");
     const direct_found = tree.find(&direct_name);
-    try testing.expectEqualStrings("*", direct_found.key);
+    try testing.expectEqualStrings("*", direct_found.key.str);
     try testing.expectEqual(50, direct_found.value.?);
 
     // Nested under wildcard - www.anything.com should find www under *
     const nested_name = try Name.fromStr("www.anything.com");
     const nested_found = tree.find(&nested_name);
-    try testing.expectEqualStrings("www", nested_found.key);
+    try testing.expectEqualStrings("www", nested_found.key.str);
     try testing.expectEqual(100, nested_found.value.?);
 }
 
@@ -446,7 +494,7 @@ test "find - wildcard at deep level" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     var com = try tree.addChild("com", 1);
@@ -465,7 +513,7 @@ test "find - wildcard at deep level" {
         const name = try Name.fromStr(case.domain);
         const found = tree.find(&name);
 
-        try testing.expectEqualStrings(case.expected_key, found.key);
+        try testing.expectEqualStrings(case.expected_key, found.key.str);
         try testing.expectEqual(case.expected_value, found.value.?);
     }
 }
@@ -478,7 +526,7 @@ test "find - nodes without values" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", null);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     // Create intermediate nodes without values
@@ -489,13 +537,13 @@ test "find - nodes without values" {
     // Should still find deepest matching node even without value
     const intermediate_name = try Name.fromStr("example.com");
     const intermediate_found = tree.find(&intermediate_name);
-    try testing.expectEqualStrings("example", intermediate_found.key);
+    try testing.expectEqualStrings("example", intermediate_found.key.str);
     try testing.expectEqual(null, intermediate_found.value);
 
     // Should find node with value
     const leaf_name = try Name.fromStr("www.example.com");
     const leaf_found = tree.find(&leaf_name);
-    try testing.expectEqualStrings("www", leaf_found.key);
+    try testing.expectEqualStrings("www", leaf_found.key.str);
     try testing.expectEqual(100, leaf_found.value.?);
 }
 
@@ -503,7 +551,7 @@ test "find - empty children hashmap" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     // Add a child but don't give it any children
@@ -513,7 +561,7 @@ test "find - empty children hashmap" {
     const name = try Name.fromStr("example.com");
     const found = tree.find(&name);
 
-    try testing.expectEqualStrings("com", found.key);
+    try testing.expectEqualStrings("com", found.key.str);
     try testing.expectEqual(1, found.value.?);
 }
 
@@ -525,7 +573,7 @@ test "find - multiple TLD branches" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     _ = try tree.addChild("com", 1);
@@ -544,7 +592,7 @@ test "find - multiple TLD branches" {
         const name = try Name.fromStr(case.domain);
         const found = tree.find(&name);
 
-        try testing.expectEqualStrings(case.expected_key, found.key);
+        try testing.expectEqualStrings(case.expected_key, found.key.str);
         try testing.expectEqual(case.expected_value, found.value.?);
     }
 }
@@ -553,7 +601,7 @@ test "find - multiple sibling domains under same TLD" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     var com = try tree.addChild("com", 1);
@@ -573,7 +621,7 @@ test "find - multiple sibling domains under same TLD" {
         const name = try Name.fromStr(case.domain);
         const found = tree.find(&name);
 
-        try testing.expectEqualStrings(case.expected_key, found.key);
+        try testing.expectEqualStrings(case.expected_key, found.key.str);
         try testing.expectEqual(case.expected_value, found.value.?);
     }
 }
@@ -582,11 +630,11 @@ test "find - complex tree with multiple branches and depths" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var tree = try Tree(i32, .{ .deinit = null }).init(&pool, ".", 0);
+    var tree = Tree(i32, .{ .deinit = null }).init(&pool);
     defer tree.deinit();
 
     // Build complex tree:
-    // . (0)
+    // . (root, no value)
     // |-- com (1)
     // |   |-- example (10)
     // |   |   |-- www (100)
@@ -609,31 +657,89 @@ test "find - complex tree with multiple branches and depths" {
     var example_org = try org.addChild("example", 11);
     _ = try example_org.addChild("docs", 110);
 
-    const cases = .{
-        // .com branch
-        .{ .domain = "com", .expected_key = "com", .expected_value = 1 },
-        .{ .domain = "example.com", .expected_key = "example", .expected_value = 10 },
-        .{ .domain = "www.example.com", .expected_key = "www", .expected_value = 100 },
-        .{ .domain = "api.example.com", .expected_key = "api", .expected_value = 101 },
-        .{ .domain = "unknown.example.com", .expected_key = "example", .expected_value = 10 },
-        // test.com with wildcard
-        .{ .domain = "test.com", .expected_key = "test", .expected_value = 20 },
-        .{ .domain = "anything.test.com", .expected_key = "*", .expected_value = 200 },
-        .{ .domain = "staging.test.com", .expected_key = "*", .expected_value = 200 },
-        // .org branch
-        .{ .domain = "org", .expected_key = "org", .expected_value = 2 },
-        .{ .domain = "example.org", .expected_key = "example", .expected_value = 11 },
-        .{ .domain = "docs.example.org", .expected_key = "docs", .expected_value = 110 },
-        // Non-existent branches
-        .{ .domain = "net", .expected_key = ".", .expected_value = 0 },
-        .{ .domain = "other.org", .expected_key = "org", .expected_value = 2 },
-    };
-
-    inline for (cases) |case| {
-        const name = try Name.fromStr(case.domain);
+    // Test .com branch
+    {
+        const name = try Name.fromStr("com");
         const found = tree.find(&name);
+        try testing.expectEqualStrings("com", found.key.str);
+        try testing.expectEqual(1, found.value.?);
+    }
+    {
+        const name = try Name.fromStr("example.com");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("example", found.key.str);
+        try testing.expectEqual(10, found.value.?);
+    }
+    {
+        const name = try Name.fromStr("www.example.com");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("www", found.key.str);
+        try testing.expectEqual(100, found.value.?);
+    }
+    {
+        const name = try Name.fromStr("api.example.com");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("api", found.key.str);
+        try testing.expectEqual(101, found.value.?);
+    }
+    {
+        const name = try Name.fromStr("unknown.example.com");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("example", found.key.str);
+        try testing.expectEqual(10, found.value.?);
+    }
 
-        try testing.expectEqualStrings(case.expected_key, found.key);
-        try testing.expectEqual(case.expected_value, found.value.?);
+    // Test test.com with wildcard
+    {
+        const name = try Name.fromStr("test.com");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("test", found.key.str);
+        try testing.expectEqual(20, found.value.?);
+    }
+    {
+        const name = try Name.fromStr("anything.test.com");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("*", found.key.str);
+        try testing.expectEqual(200, found.value.?);
+    }
+    {
+        const name = try Name.fromStr("staging.test.com");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("*", found.key.str);
+        try testing.expectEqual(200, found.value.?);
+    }
+
+    // Test .org branch
+    {
+        const name = try Name.fromStr("org");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("org", found.key.str);
+        try testing.expectEqual(2, found.value.?);
+    }
+    {
+        const name = try Name.fromStr("example.org");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("example", found.key.str);
+        try testing.expectEqual(11, found.value.?);
+    }
+    {
+        const name = try Name.fromStr("docs.example.org");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("docs", found.key.str);
+        try testing.expectEqual(110, found.value.?);
+    }
+
+    // Test non-existent branches - should return root
+    {
+        const name = try Name.fromStr("net");
+        const found = tree.find(&name);
+        try testing.expect(found.key == .root);
+        try testing.expectEqual(null, found.value);
+    }
+    {
+        const name = try Name.fromStr("other.org");
+        const found = tree.find(&name);
+        try testing.expectEqualStrings("org", found.key.str);
+        try testing.expectEqual(2, found.value.?);
     }
 }
