@@ -36,9 +36,9 @@ pub fn init(
     return Self{
         .records = .{
             .IN = .{
-                .A = NameTree.RecordListTree.namespace(memory, namespace),
-                .AAAA = NameTree.RecordListTree.namespace(memory, namespace),
-                .CNAME = NameTree.RecordTree.namespace(memory, namespace),
+                .A = NameTree.RecordListTree.init(memory, namespace.*),
+                .AAAA = NameTree.RecordListTree.init(memory, namespace.*),
+                .CNAME = NameTree.RecordTree.init(memory, namespace.*),
             },
         },
     };
@@ -54,11 +54,11 @@ pub fn query(self: *const Self, name: *const Name, dnsType: Type, class: Class) 
     switch (class) {
         .IN => switch (dnsType) {
             .A => {
-                const tree = self.records.IN.A.find(name);
+                const tree = self.records.IN.A.tree.find(name);
                 if (tree.value) |*v| return v else return null;
             },
             .AAAA => {
-                const tree = self.records.IN.AAAA.find(name);
+                const tree = self.records.IN.AAAA.tree.find(name);
                 if (tree.value) |*v| return v else return null;
             },
             else => @panic("NOT IMPLEMENTED"),
