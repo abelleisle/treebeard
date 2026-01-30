@@ -37,14 +37,14 @@ backend: Backend,
 
 memory: *DNSMemory,
 
-context: Name,
+namespace: Name,
 
 /// Create a DNS Zone using a dictionary based backend
-pub fn initDict(memory: *DNSMemory, context: Name) !Zone {
+pub fn initDict(memory: *DNSMemory, namespace: Name) !Zone {
     return Zone{
-        .backend = .{ .dict = try Dict.init(memory) },
+        .backend = .{ .dict = Dict.init(memory, &namespace) },
         .memory = memory,
-        .context = context,
+        .namespace = namespace,
     };
 }
 
@@ -56,15 +56,13 @@ pub fn deinit(self: *Zone) void {
         .custom => |*c| c.vtable.deinit(c, self.memory),
     }
 
-    self.context.deinit();
+    self.namespace.deinit();
 }
 
 pub fn query(self: *const Zone, name: *const Name, dnsType: Type, class: Class) Errors!?*const RecordList {
     switch (self.backend) {
         .dict => |d| {
-            const result = d.query(name, &self.context, dnsType, class) catch |err| {
-                return err;
-            };
+            const result = d.query(name, dnsType, class);
 
             return result;
         },
