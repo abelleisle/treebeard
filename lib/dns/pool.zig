@@ -88,6 +88,8 @@ pub const DNSMemory = struct {
     arena: ArenaAllocator,
     _allocator: Allocator, // Only used to access base allocator during testing
 
+    _rand: std.Random.DefaultPrng,
+
     // Pools
     pools: struct {
         udp: UDPMessagePool,
@@ -109,9 +111,14 @@ pub const DNSMemory = struct {
         // so use the same base allocator
         const pool_allocator = base_allocator;
 
+        // Get random value to seed our psrng
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+
         return DNSMemory{
             .arena = arena,
             ._allocator = base_allocator,
+            ._rand = std.Random.DefaultPrng.init(seed),
             .pools = .{
                 .udp = UDPMessagePool.init(pool_allocator),
             },
@@ -141,6 +148,18 @@ pub const DNSMemory = struct {
             self._allocator
         else
             self.arena.allocator();
+    }
+
+    pub fn randRange(self: *DNSMemory, comptime T: type, low: T, high: T) T {
+        comptime if (@typeInfo(T) != .int) {
+            @compileError("Can only generate random integers");
+        };
+
+        var r = self._rand.next();
+        r %= (high - low);
+        r += low;
+
+        return r;
     }
 
     pub fn getReader(self: *DNSMemory, readerType: ReaderType) !DNSReader {

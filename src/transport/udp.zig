@@ -32,6 +32,18 @@ pub fn recv_loop(memory: *DNSMemory) !void {
                 .memory = memory,
                 .class = .IN,
                 .type = .A,
+                .name = try Name.fromStr("*.com"),
+                .ttl = 300,
+                .rdata = .{ .A = .{ 1, 1, 1, 1 } },
+            };
+
+            try zone.backend.dict.records.IN.A.add(&record);
+        }
+        {
+            const record = Record{
+                .memory = memory,
+                .class = .IN,
+                .type = .A,
                 .name = try Name.fromStr("google.com"),
                 .ttl = 300,
                 .rdata = .{ .A = .{ 1, 2, 3, 4 } },
@@ -145,7 +157,6 @@ pub fn recv_loop(memory: *DNSMemory) !void {
 }
 
 fn handle_message(memory: *DNSMemory, zone: *Zone, message: *Message) !void {
-    _ = memory;
     message.header.flags.QR = true;
     message.header.flags.RA = true;
     message.header.flags.AD = false;
@@ -154,7 +165,12 @@ fn handle_message(memory: *DNSMemory, zone: *Zone, message: *Message) !void {
         for (message.questions.items) |*question| {
             const answers = try zone.query(&question.name, question.type, question.class);
             if (answers) |answer| {
-                for (answer.items) |a| {
+                const len = answer.items.len;
+                const start = memory.randRange(usize, 0, len);
+                for (answer.items[start..len]) |a| {
+                    try message.addAnswer(a);
+                }
+                for (answer.items[0..start]) |a| {
                     try message.addAnswer(a);
                 }
             } else {
