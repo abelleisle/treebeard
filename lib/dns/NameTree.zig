@@ -9,25 +9,78 @@ const RecordList = treebeard.RecordList;
 
 //--------------------------------------------------
 // Record Tree
-pub const RecordTree = Tree(Record, .{ .deinit = recordDeinit });
+pub const RecordTree = struct {
+    tree: BaseTree,
+    const BaseTree = Tree(Record, .{ .deinit = RecordTree.recordDeinit });
 
-fn recordDeinit(ctx: *anyopaque, memory: *DNSMemory) void {
-    const self: *Record = @ptrCast(@alignCast(ctx));
-    _ = memory;
+    //---------------------
+    // Init/Deinit
+    pub fn init(memory: *DNSMemory, namespace: ?Name) RecordTree {
+        return RecordTree{
+            .tree = if (namespace) |ns| BaseTree.namespace(memory, &ns) else BaseTree.init(memory),
+        };
+    }
 
-    self.deinit();
-}
+    pub fn deinit(self: *RecordTree) void {
+        self.deinit();
+    }
+
+    //---------------------
+    // Add Record
+    pub fn add(self: *RecordTree, record: *const Record) !void {
+        var dst = try self.tree.getOrCreate(&record.name);
+        dst.value = record;
+    }
+
+    //---------------------
+    // Virtual Table
+    fn recordDeinit(ctx: *anyopaque, memory: *DNSMemory) void {
+        const self: *Record = @ptrCast(@alignCast(ctx));
+        _ = memory;
+
+        self.deinit();
+    }
+};
 
 //--------------------------------------------------
 // Request List Tree
-pub const RecordListTree = Tree(RecordList, .{ .deinit = recordListDeinit });
+pub const RecordListTree = struct {
+    tree: BaseTree,
+    const BaseTree = Tree(RecordList, .{ .deinit = RecordListTree.recordListDeinit });
 
-fn recordListDeinit(ctx: *anyopaque, memory: *DNSMemory) void {
-    const self: *RecordList = @ptrCast(@alignCast(ctx));
+    //---------------------
+    // Init/Deinit
+    pub fn init(memory: *DNSMemory, namespace: ?Name) RecordListTree {
+        return RecordListTree{
+            .tree = if (namespace) |ns| BaseTree.namespace(memory, &ns) else BaseTree.init(memory),
+        };
+    }
 
-    for (self.items) |*record| record.deinit();
-    self.deinit(memory.alloc());
-}
+    pub fn deinit(self: *RecordListTree) void {
+        self.deinit();
+    }
+
+    //---------------------
+    // Add Record
+    pub fn add(self: *RecordListTree, record: *const Record) !void {
+        var dst = try self.tree.getOrCreate(&record.name);
+
+        if (dst.value == null) {
+            dst.value = try RecordList.initCapacity(self.tree.memory.alloc(), 1);
+        }
+
+        try dst.value.?.append(self.tree.memory.alloc(), record.*);
+    }
+
+    //---------------------
+    // Virtual Table
+    fn recordListDeinit(ctx: *anyopaque, memory: *DNSMemory) void {
+        const self: *RecordList = @ptrCast(@alignCast(ctx));
+
+        for (self.items) |*record| record.deinit();
+        self.deinit(memory.alloc());
+    }
+};
 
 //--------------------------------------------------
 // Tree
@@ -175,6 +228,28 @@ fn Tree(comptime T: type, vTable: VTable) type {
                 }
                 c.deinit();
                 self.children = null;
+            }
+        }
+
+        pub fn getOrCreate(self: *NT, name: *const Name) !*NT {
+            var iter = switch (self.key) {
+                .namespace => |*ns| name.iterContext(ns) catch {
+                    return self;
+                } orelse {
+                    return self;
+                },
+                else => name.iterReverse(),
+            };
+
+            return try self.create_inner(&iter);
+        }
+
+        fn create_inner(self: *NT, iter: *Name.Iterator) !*NT {
+            if (iter.next()) |label| {
+                var newChild = try self.addChild(label, null);
+                return try newChild.create_inner(iter);
+            } else {
+                return self;
             }
         }
 

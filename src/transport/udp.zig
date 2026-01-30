@@ -27,9 +27,6 @@ pub fn recv_loop(memory: *DNSMemory) !void {
 
     // IPv4 Records
     {
-        var com = try zone.backend.dict.records.IN.A.addChild("com", null);
-        var google = try com.addChild("google", try RecordList.initCapacity(memory.alloc(), 1));
-
         {
             const record = Record{
                 .memory = memory,
@@ -40,7 +37,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
                 .rdata = .{ .A = .{ 1, 2, 3, 4 } },
             };
 
-            try google.value.?.append(memory.alloc(), record);
+            try zone.backend.dict.records.IN.A.add(&record);
         }
         {
             const record = Record{
@@ -52,14 +49,11 @@ pub fn recv_loop(memory: *DNSMemory) !void {
                 .rdata = .{ .A = .{ 1, 2, 3, 5 } },
             };
 
-            try google.value.?.append(memory.alloc(), record);
+            try zone.backend.dict.records.IN.A.add(&record);
         }
     }
     // IPv6 Records
     {
-        var com = try zone.backend.dict.records.IN.AAAA.addChild("com", null);
-        var google = try com.addChild("google", try RecordList.initCapacity(memory.alloc(), 1));
-
         {
             const record = Record{
                 .memory = memory,
@@ -75,7 +69,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
                 } },
             };
 
-            try google.value.?.append(memory.alloc(), record);
+            try zone.backend.dict.records.IN.AAAA.add(&record);
         }
         {
             const record = Record{
@@ -92,7 +86,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
                 } },
             };
 
-            try google.value.?.append(memory.alloc(), record);
+            try zone.backend.dict.records.IN.AAAA.add(&record);
         }
     }
 
