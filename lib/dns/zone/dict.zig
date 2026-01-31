@@ -85,14 +85,14 @@ test "dict - init and deinit" {
     defer dict.deinit();
 
     // Verify trees are initialized with namespace key
-    try testing.expect(dict.records.IN.A.key == .namespace);
-    try testing.expect(dict.records.IN.AAAA.key == .namespace);
-    try testing.expect(dict.records.IN.CNAME.key == .namespace);
+    try testing.expect(dict.records.IN.A.tree.key == .namespace);
+    try testing.expect(dict.records.IN.AAAA.tree.key == .namespace);
+    try testing.expect(dict.records.IN.CNAME.tree.key == .namespace);
 
     // Verify no values at namespace root
-    try testing.expectEqual(null, dict.records.IN.A.value);
-    try testing.expectEqual(null, dict.records.IN.AAAA.value);
-    try testing.expectEqual(null, dict.records.IN.CNAME.value);
+    try testing.expectEqual(null, dict.records.IN.A.tree.value);
+    try testing.expectEqual(null, dict.records.IN.AAAA.tree.value);
+    try testing.expectEqual(null, dict.records.IN.CNAME.tree.value);
 }
 
 // ==========================================================
@@ -108,8 +108,8 @@ test "dict - add A records to tree" {
     defer dict.deinit();
 
     // Add subdomain nodes to the A record tree
-    const www = try dict.records.IN.A.addChild("www", null);
-    const api = try dict.records.IN.A.addChild("api", null);
+    const www = try dict.records.IN.A.tree.addChild("www", null);
+    const api = try dict.records.IN.A.tree.addChild("api", null);
 
     try testing.expectEqualStrings("www", www.key.str);
     try testing.expectEqualStrings("api", api.key.str);
@@ -124,7 +124,7 @@ test "dict - add nested subdomains" {
     defer dict.deinit();
 
     // Build: namespace -> www -> staging
-    const www = try dict.records.IN.A.addChild("www", null);
+    const www = try dict.records.IN.A.tree.addChild("www", null);
     const staging = try www.addChild("staging", null);
 
     try testing.expectEqualStrings("www", www.key.str);
@@ -140,7 +140,7 @@ test "dict - add wildcard subdomain" {
     defer dict.deinit();
 
     // Add wildcard node
-    const wildcard = try dict.records.IN.A.addChild("*", null);
+    const wildcard = try dict.records.IN.A.tree.addChild("*", null);
     try testing.expectEqualStrings("*", wildcard.key.str);
 }
 
@@ -157,7 +157,7 @@ test "dict - add CNAME record structure" {
     defer dict.deinit();
 
     // Add www CNAME node
-    const www = try dict.records.IN.CNAME.addChild("www", null);
+    const www = try dict.records.IN.CNAME.tree.addChild("www", null);
     try testing.expectEqualStrings("www", www.key.str);
 }
 
@@ -217,7 +217,7 @@ test "dict - query finds subdomain node" {
     defer dict.deinit();
 
     // Add www subdomain (no value yet)
-    _ = try dict.records.IN.A.addChild("www", null);
+    _ = try dict.records.IN.A.tree.addChild("www", null);
 
     const query_name = try Name.fromStr("www.example.com");
 
@@ -235,7 +235,7 @@ test "dict - query with wildcard matching" {
     defer dict.deinit();
 
     // Add wildcard subdomain
-    _ = try dict.records.IN.A.addChild("*", null);
+    _ = try dict.records.IN.A.tree.addChild("*", null);
 
     const query_name = try Name.fromStr("anything.example.com");
 
@@ -253,8 +253,8 @@ test "dict - query prefers exact match over wildcard" {
     defer dict.deinit();
 
     // Add both exact and wildcard
-    _ = try dict.records.IN.A.addChild("www", null);
-    _ = try dict.records.IN.A.addChild("*", null);
+    _ = try dict.records.IN.A.tree.addChild("www", null);
+    _ = try dict.records.IN.A.tree.addChild("*", null);
 
     const www_query = try Name.fromStr("www.example.com");
     const other_query = try Name.fromStr("other.example.com");
@@ -281,22 +281,22 @@ test "dict - separate trees for A and AAAA" {
     defer dict.deinit();
 
     // Add www to A tree only
-    _ = try dict.records.IN.A.addChild("www", null);
+    _ = try dict.records.IN.A.tree.addChild("www", null);
 
     // Add api to AAAA tree only
-    _ = try dict.records.IN.AAAA.addChild("api", null);
+    _ = try dict.records.IN.AAAA.tree.addChild("api", null);
 
     // Verify trees are separate
-    try testing.expect(dict.records.IN.A.children != null);
-    try testing.expect(dict.records.IN.AAAA.children != null);
+    try testing.expect(dict.records.IN.A.tree.children != null);
+    try testing.expect(dict.records.IN.AAAA.tree.children != null);
 
     // A tree should have www
-    const a_children = dict.records.IN.A.children.?;
+    const a_children = dict.records.IN.A.tree.children.?;
     try testing.expect(a_children.contains("www"));
     try testing.expect(!a_children.contains("api"));
 
     // AAAA tree should have api
-    const aaaa_children = dict.records.IN.AAAA.children.?;
+    const aaaa_children = dict.records.IN.AAAA.tree.children.?;
     try testing.expect(aaaa_children.contains("api"));
     try testing.expect(!aaaa_children.contains("www"));
 }
@@ -310,8 +310,8 @@ test "dict - query correct record type" {
     defer dict.deinit();
 
     // Add www to both A and AAAA trees
-    _ = try dict.records.IN.A.addChild("www", null);
-    _ = try dict.records.IN.AAAA.addChild("www", null);
+    _ = try dict.records.IN.A.tree.addChild("www", null);
+    _ = try dict.records.IN.AAAA.tree.addChild("www", null);
 
     const query_name = try Name.fromStr("www.example.com");
 
@@ -336,7 +336,7 @@ test "dict - deep subdomain hierarchy" {
     defer dict.deinit();
 
     // Build: namespace -> www -> staging -> v1
-    var www = try dict.records.IN.A.addChild("www", null);
+    var www = try dict.records.IN.A.tree.addChild("www", null);
     var staging = try www.addChild("staging", null);
     _ = try staging.addChild("v1", null);
 
@@ -350,7 +350,7 @@ test "dict - deep subdomain hierarchy" {
 
     inline for (test_cases) |case| {
         const query_name = try Name.fromStr(case.domain);
-        const tree = dict.records.IN.A.find(&query_name);
+        const tree = dict.records.IN.A.tree.find(&query_name);
         try testing.expectEqualStrings(case.expected_key, tree.key.str);
     }
 }
@@ -364,17 +364,17 @@ test "dict - multiple branches at same level" {
     defer dict.deinit();
 
     // Add multiple subdomains at namespace level
-    _ = try dict.records.IN.A.addChild("www", null);
-    _ = try dict.records.IN.A.addChild("api", null);
-    _ = try dict.records.IN.A.addChild("mail", null);
-    _ = try dict.records.IN.A.addChild("ftp", null);
+    _ = try dict.records.IN.A.tree.addChild("www", null);
+    _ = try dict.records.IN.A.tree.addChild("api", null);
+    _ = try dict.records.IN.A.tree.addChild("mail", null);
+    _ = try dict.records.IN.A.tree.addChild("ftp", null);
 
     const subdomains = .{ "www", "api", "mail", "ftp" };
 
     inline for (subdomains) |sub| {
         const domain = sub ++ ".example.com";
         const query_name = try Name.fromStr(domain);
-        const tree = dict.records.IN.A.find(&query_name);
+        const tree = dict.records.IN.A.tree.find(&query_name);
         try testing.expectEqualStrings(sub, tree.key.str);
     }
 }
