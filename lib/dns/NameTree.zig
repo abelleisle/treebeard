@@ -22,7 +22,7 @@ pub const RecordTree = struct {
     }
 
     pub fn deinit(self: *RecordTree) void {
-        self.deinit();
+        self.tree.deinit();
     }
 
     //---------------------
@@ -57,7 +57,7 @@ pub const RecordListTree = struct {
     }
 
     pub fn deinit(self: *RecordListTree) void {
-        self.deinit();
+        self.tree.deinit();
     }
 
     //---------------------
