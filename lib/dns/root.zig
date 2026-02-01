@@ -4,6 +4,7 @@ const codes = @import("core/codes.zig");
 
 pub const Opcode = codes.Opcode;
 pub const ResponseCode = codes.ResponseCode;
+pub const ExtendedResponseCode = codes.ExtendedResponseCode;
 pub const Type = codes.Type;
 pub const QType = codes.QType;
 pub const Class = codes.Class;
@@ -53,6 +54,7 @@ pub fn buildQuery(memory: *DNSMemory, query: []const u8, record_type: Type) !Mes
 // This ensures all tests in these files are run when executing `zig build test`
 
 test {
+    _ = @import("core/Additional.zig");
     _ = @import("core/Name.zig");
     _ = @import("core/Message.zig");
     _ = @import("core/Question.zig");

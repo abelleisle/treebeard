@@ -70,6 +70,7 @@ pub const RData = union(enum) {
     //     port: u16,
     //     target: Name,
     // },
+    Other, // Data is included as part of parent struct
     Unknown: []u8, // For unimplemented types
 
     pub fn deinit(self: *RData, memory: *DNSMemory) void {
@@ -85,6 +86,7 @@ pub const RData = union(enum) {
             .TXT => |txt| {
                 memory.alloc().free(txt);
             },
+            .Other => {}, // The parent object will free the data
             .Unknown => |data| memory.alloc().free(data),
             else => {},
         }
@@ -195,6 +197,7 @@ pub fn encode(self: *Record, writer: *DNSWriter) !void {
                 return error.NotEnoughBytes;
             }
         },
+        .Other => {}, // Parent object will encode payload
         .Unknown => |data| {
             try writer.writer.writeInt(u16, @intCast(data.len), .big);
             _ = try writer.writer.write(data);
