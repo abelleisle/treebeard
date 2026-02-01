@@ -12,6 +12,7 @@ const ResponseCode = codes.ResponseCode;
 const Opcode = codes.Opcode;
 const Question = @import("Question.zig");
 const Record = @import("Record.zig");
+const Additional = @import("Additional.zig");
 
 const treebeard = @import("treebeard");
 const DNSMemory = treebeard.DNSMemory;
@@ -33,8 +34,15 @@ questions: ArrayList(Question),
 /// List of records
 answers: ArrayList(Record),
 
-/// Creates an empty Message, use `addQuestion`, or `addAnswer` to actually
-/// add content to the message.
+/// List of authority records
+authority: ArrayList(Record),
+
+/// List of additional records
+additional: ArrayList(Additional),
+
+/// Creates an empty Message.
+/// Use `addQuestion`, `addAnswer`, `addAuthority`, or `addAdditional`
+/// to add content to the message.
 pub fn init(memory: *DNSMemory, transactionID: u16, flags: Header.Flags) Message {
     return Message{
         .memory = memory,
@@ -48,19 +56,111 @@ pub fn init(memory: *DNSMemory, transactionID: u16, flags: Header.Flags) Message
         },
         .questions = ArrayList(Question).empty,
         .answers = ArrayList(Record).empty,
+        .authority = ArrayList(Record).empty,
+        .additional = ArrayList(Additional).empty,
     };
 }
 
+/// Creates an update (RFC2136) Message for requesting a name update.
+/// Use `addQuestion`, `addAnswer`, `addAuthority`, or `addAdditional`
+/// to add content to the message.
+pub fn updateRequest(memory: *DNSMemory, transactionID: u16) Message {
+    return Message{
+        .memory = memory,
+        .header = Header{
+            .transactionID = transactionID,
+            .flags = .{
+                .QR = false,
+                .OPCODE = .update,
+                .AA = false,
+                .TC = false,
+                .RD = false,
+                .RA = false,
+                .Z = 0,
+                .AD = false,
+                .CD = false,
+                .RCODE = .noError,
+            },
+            .numQuestions = 0,
+            .numAnswers = 0,
+            .numAuthRR = 0,
+            .numAddRR = 0,
+        },
+        .questions = ArrayList(Question).empty,
+        .answers = ArrayList(Record).empty,
+        .authority = ArrayList(Record).empty,
+        .additional = ArrayList(Additional).empty,
+    };
+}
+
+/// Creates an update (RFC2136) Message for responding to a name update request.
+/// Use `addQuestion`, `addAnswer`, `addAuthority`, or `addAdditional`
+/// to add content to the message.
+pub fn updateResponse(memory: *DNSMemory, transactionID: u16) Message {
+    return Message{
+        .memory = memory,
+        .header = Header{
+            .transactionID = transactionID,
+            .flags = .{
+                .QR = true,
+                .OPCODE = .update,
+                .AA = false,
+                .TC = false,
+                .RD = false,
+                .RA = false,
+                .Z = 0,
+                .AD = false,
+                .CD = false,
+                .RCODE = .noError,
+            },
+            .numQuestions = 0,
+            .numAnswers = 0,
+            .numAuthRR = 0,
+            .numAddRR = 0,
+        },
+        .questions = ArrayList(Question).empty,
+        .answers = ArrayList(Record).empty,
+        .authority = ArrayList(Record).empty,
+        .additional = ArrayList(Additional).empty,
+    };
+}
+
+/// Is this message an update request/response?
+pub inline fn isUpdate(self: *const Message) bool {
+    return self.header.flags.OPCODE == .update;
+}
+
 /// Adds the provided question to our message
+/// Note: When this message is an update, this refers to ZOCOUNT
 pub fn addQuestion(self: *Message, question: Question) !void {
+    // Updates can only have a single zone specified
+    if (self.isUpdate() and (self.header.numQuestions > 0)) {
+        return error.ZoneAlreadySet;
+    }
+
     try self.questions.append(self.memory.alloc(), question);
     self.header.numQuestions += 1;
 }
 
 /// Adds the provided answer (record) to our message
+/// Note: When this message is an update, this refers to PRCOUNT
 pub fn addAnswer(self: *Message, answer: Record) !void {
     try self.answers.append(self.memory.alloc(), answer);
     self.header.numAnswers += 1;
+}
+
+/// Adds an authority RR to the message
+/// Note: When this message is an update, this refers to UPCOUNT
+pub fn addAuthority(self: *Message, authority: Record) !void {
+    try self.authority.append(self.memory.alloc(), authority);
+    self.header.numAuthRR += 1;
+}
+
+/// Adds an additional RR to the message (typically TSIG for authentication)
+/// Note: When this message is an update, this refers to ADCOUNT
+pub fn addAdditional(self: *Message, additional: Additional) !void {
+    try self.additional.append(self.memory.alloc(), additional);
+    self.header.numAddRR += 1;
 }
 
 pub fn decode(reader: *DNSReader) !Message {
@@ -73,17 +173,28 @@ pub fn decode(reader: *DNSReader) !Message {
         questions.deinit(alloc);
     }
 
-    var answers = try parse_answers(alloc, reader, header.numAnswers);
+    var answers = try parse_records(alloc, reader, header.numAnswers);
     errdefer {
         for (answers.items) |*a| a.deinit();
         answers.deinit(alloc);
     }
+
+    var authorities = try parse_records(alloc, reader, header.numAuthRR);
+    errdefer {
+        for (authorities.items) |*u| u.deinit();
+        authorities.deinit(alloc);
+    }
+
+    // TODO: Parse additional section (needs Additional.decode)
+    const additional = ArrayList(Additional).empty;
 
     return Message{
         .memory = reader.memory,
         .header = header,
         .questions = questions,
         .answers = answers,
+        .authority = authorities,
+        .additional = additional,
     };
 }
 
@@ -107,7 +218,7 @@ fn parse_questions(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(
 
 /// Parse answers from message bytes
 /// Note: This must be done AFTER parsing the header and questions
-fn parse_answers(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Record) {
+fn parse_records(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Record) {
     var answers = try ArrayList(Record).initCapacity(alloc, count);
     errdefer {
         for (answers.items) |*a| a.deinit();
@@ -129,6 +240,12 @@ pub fn deinit(self: *Message) void {
 
     for (self.answers.items) |*a| a.deinit();
     self.answers.deinit(self.memory.alloc());
+
+    for (self.authority.items) |*a| a.deinit();
+    self.authority.deinit(self.memory.alloc());
+
+    for (self.additional.items) |*a| a.deinit();
+    self.additional.deinit(self.memory.alloc());
 }
 
 pub fn encode(self: *const Message, writer: *DNSWriter) !void {
@@ -137,6 +254,12 @@ pub fn encode(self: *const Message, writer: *DNSWriter) !void {
         try q.encode(writer);
     }
     for (self.answers.items) |*a| {
+        try a.encode(writer);
+    }
+    for (self.authority.items) |*a| {
+        try a.encode(writer);
+    }
+    for (self.additional.items) |*a| {
         try a.encode(writer);
     }
 }
@@ -215,8 +338,29 @@ pub const Header = packed struct(u96) {
             .numAddRR = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
         };
 
+        // Our message is truncated.
+        // Since this is the first thing we decode, short circuit our decode
+        // process here so we can switch to TCP.
         if (header.flags.TC) {
             return error.TruncatedMessage;
+        }
+
+        if (header.flags.OPCODE == .update) {
+            // Update requests can only have a single zone specified.
+            if (header.numQuestions > 1) {
+                return error.ZoneAlreadySet;
+            }
+
+            // We these bits have to be 0 in update headers.
+            if ((header.flags.AA == true) or
+                (header.flags.RD == true) or
+                (header.flags.RA == true) or
+                (header.flags.Z != 0) or
+                (header.flags.AD == true) or
+                (header.flags.CD == true))
+            {
+                return error.InvalidFlagSettings;
+            }
         }
 
         return header;
