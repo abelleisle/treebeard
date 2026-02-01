@@ -97,6 +97,16 @@ pub fn encode(self: *Additional, writer: *DNSWriter) !void {
     }
 }
 
+pub fn deinit(self: *Additional) void {
+    switch (self._adata) {
+        .TSIG => |*data| {
+            self.memory.alloc().free(data.mac);
+        },
+    }
+
+    self._inner.deinit();
+}
+
 //--------------------------------------------------
 // Tests
 
@@ -160,7 +170,7 @@ test "TSIG encode - hmac-sha256 with 32-byte MAC" {
         0x0000_65A1_B2C3, // fixed timestamp for testing
         .noError,
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -248,7 +258,7 @@ test "TSIG encode - hmac-md5.sig-alg.reg.int algorithm name" {
         0x0000_12345678,
         .noError,
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -292,7 +302,7 @@ test "TSIG encode - error response with BADSIG" {
         0x0000_AABBCCDD,
         .badSig, // BADSIG = 16
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -334,7 +344,7 @@ test "TSIG encode - error response with BADKEY" {
         0x0000_11111111,
         .badKey, // BADKEY = 17
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -366,7 +376,7 @@ test "TSIG encode - error response with BADTIME" {
         0x0000_22222222,
         .badTime, // BADTIME = 18
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -396,7 +406,7 @@ test "TSIG encode - maximum fudge value" {
         0x0000_00000000,
         .noError,
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -428,7 +438,7 @@ test "TSIG encode - timestamp at epoch boundary" {
         0, // epoch
         .noError,
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -461,7 +471,7 @@ test "TSIG encode - timestamp at max 48-bit value" {
         0xFFFF_FFFFFFFF, // max u48
         .noError,
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -492,7 +502,7 @@ test "TSIG encode - single label key name" {
         0x0000_00000001,
         .noError,
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -524,7 +534,7 @@ test "TSIG encode - deeply nested key name" {
         0x0000_DEADBEEF,
         .noError,
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -566,7 +576,7 @@ test "TSIG encode - hmac-sha512 with 64-byte MAC" {
         0x0000_CAFEBABE,
         .noError,
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -610,7 +620,7 @@ test "TSIG encode - rdlength calculation correctness" {
             0x0000_11223344,
             .noError,
         );
-        defer memory.alloc().free(additional._adata.TSIG.mac);
+        defer additional.deinit();
 
         var buf: [512]u8 = undefined;
         var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -646,7 +656,7 @@ test "TSIG encode - verify wire format matches RFC 2845" {
         0x0000_00000001, // timestamp = 1
         .noError,
     );
-    defer memory.alloc().free(additional._adata.TSIG.mac);
+    defer additional.deinit();
 
     var buf: [512]u8 = undefined;
     var writer = try memory.getWriter(.{ .fixed = &buf });
@@ -714,7 +724,7 @@ test "TSIG encode - transaction ID boundary values" {
             0,
             .noError,
         );
-        defer memory.alloc().free(additional._adata.TSIG.mac);
+        defer additional.deinit();
 
         var buf: [512]u8 = undefined;
         var writer = try memory.getWriter(.{ .fixed = &buf });
