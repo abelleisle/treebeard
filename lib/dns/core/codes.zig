@@ -139,8 +139,8 @@ pub const ExtendedResponseCode = enum(u16) {
     /// Bad Truncation                     [RFC4635]
     badTrunc = 22,
 
-    /// Decode Record type from encoded DNS format
-    pub fn decode(reader: *DNSReader) !Type {
+    /// Decode ExtendedResponseCode from encoded DNS format
+    pub fn decode(reader: *DNSReader) !ExtendedResponseCode {
         const rcodeInt: u16 = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
         const rcodeEnum: ExtendedResponseCode = std.meta.intToEnum(ExtendedResponseCode, rcodeInt) catch return error.InvalidExtendedRCode;
         return rcodeEnum;

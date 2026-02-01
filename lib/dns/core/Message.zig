@@ -216,7 +216,7 @@ fn parse_questions(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(
     return questions;
 }
 
-/// Parse answers from message bytes
+/// Parse records from message bytes
 /// Note: This must be done AFTER parsing the header and questions
 fn parse_records(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Record) {
     var answers = try ArrayList(Record).initCapacity(alloc, count);
@@ -232,6 +232,24 @@ fn parse_records(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Re
     }
 
     return answers;
+}
+
+/// Parse answers from message bytes
+/// Note: This must be done AFTER parsing the header, questions, and records
+fn parse_additional(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Additional) {
+    var additional = try ArrayList(Additional).initCapacity(alloc, count);
+    errdefer {
+        for (additional.items) |*a| a.deinit();
+        additional.deinit(alloc);
+    }
+
+    var i: u16 = 0;
+    while (i < count) : (i += 1) {
+        const a = try Additional.decode(reader);
+        try additional.append(alloc, a);
+    }
+
+    return additional;
 }
 
 pub fn deinit(self: *Message) void {
@@ -542,4 +560,359 @@ test "basic encode" {
     try message.encode(&writer);
 
     try testing.expectEqualSlices(u8, t.data.query.duckduckgo_simple, writer.writer.buffered());
+}
+
+test "updateRequest - creates correct flags" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    var message = Message.updateRequest(&pool, 0xABCD);
+    defer message.deinit();
+
+    try testing.expectEqual(@as(u16, 0xABCD), message.header.transactionID);
+    try testing.expectEqual(false, message.header.flags.QR);
+    try testing.expect(message.header.flags.OPCODE == .update);
+    try testing.expectEqual(false, message.header.flags.AA);
+    try testing.expectEqual(false, message.header.flags.TC);
+    try testing.expectEqual(false, message.header.flags.RD);
+    try testing.expectEqual(false, message.header.flags.RA);
+    try testing.expectEqual(@as(u1, 0), message.header.flags.Z);
+    try testing.expectEqual(false, message.header.flags.AD);
+    try testing.expectEqual(false, message.header.flags.CD);
+    try testing.expect(message.header.flags.RCODE == .noError);
+    try testing.expectEqual(true, message.isUpdate());
+}
+
+test "updateResponse - creates correct flags" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    var message = Message.updateResponse(&pool, 0x1234);
+    defer message.deinit();
+
+    try testing.expectEqual(@as(u16, 0x1234), message.header.transactionID);
+    try testing.expectEqual(true, message.header.flags.QR);
+    try testing.expect(message.header.flags.OPCODE == .update);
+    try testing.expect(message.header.flags.RCODE == .noError);
+    try testing.expectEqual(true, message.isUpdate());
+}
+
+test "isUpdate - returns false for regular query" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    var message = Message.init(&pool, 0x1234, .{});
+    defer message.deinit();
+
+    try testing.expectEqual(false, message.isUpdate());
+}
+
+test "addQuestion - update rejects multiple zones" {
+    const Name = @import("Name.zig");
+
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    var message = Message.updateRequest(&pool, 0x1234);
+    defer message.deinit();
+
+    const zone1 = Question{
+        .memory = &pool,
+        .name = try Name.fromStr("example.com."),
+        .type = .SOA,
+        .class = .IN,
+    };
+
+    var zone2 = Question{
+        .memory = &pool,
+        .name = try Name.fromStr("other.com."),
+        .type = .SOA,
+        .class = .IN,
+    };
+    defer zone2.deinit();
+
+    try message.addQuestion(zone1);
+    try testing.expectError(error.ZoneAlreadySet, message.addQuestion(zone2));
+}
+
+test "addQuestion - regular query allows multiple questions" {
+    const Name = @import("Name.zig");
+
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    var message = Message.init(&pool, 0x1234, .{});
+    defer message.deinit();
+
+    const q1 = Question{
+        .memory = &pool,
+        .name = try Name.fromStr("example.com."),
+        .type = .A,
+        .class = .IN,
+    };
+
+    const q2 = Question{
+        .memory = &pool,
+        .name = try Name.fromStr("other.com."),
+        .type = .A,
+        .class = .IN,
+    };
+
+    try message.addQuestion(q1);
+    try message.addQuestion(q2);
+
+    try testing.expectEqual(@as(u16, 2), message.header.numQuestions);
+}
+
+test "header decode - update with invalid AA flag" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    // UPDATE header with AA=1 (invalid for UPDATE)
+    const invalid_header = [_]u8{
+        0x12, 0x34, // Transaction ID
+        0x2C, 0x00, // Flags: QR=0, OPCODE=5, AA=1 (invalid)
+        0x00, 0x01, // ZOCOUNT: 1
+        0x00, 0x00, // PRCOUNT: 0
+        0x00, 0x00, // UPCOUNT: 0
+        0x00, 0x00, // ADCOUNT: 0
+    };
+
+    var reader = try pool.getReader(.{ .fixed = &invalid_header });
+    defer reader.deinit();
+
+    try testing.expectError(error.InvalidFlagSettings, Header.decode(&reader));
+}
+
+test "header decode - update with invalid RD flag" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    // UPDATE header with RD=1 (invalid for UPDATE)
+    const invalid_header = [_]u8{
+        0x12, 0x34, // Transaction ID
+        0x29, 0x00, // Flags: QR=0, OPCODE=5, RD=1 (invalid)
+        0x00, 0x01, // ZOCOUNT: 1
+        0x00, 0x00, // PRCOUNT: 0
+        0x00, 0x00, // UPCOUNT: 0
+        0x00, 0x00, // ADCOUNT: 0
+    };
+
+    var reader = try pool.getReader(.{ .fixed = &invalid_header });
+    defer reader.deinit();
+
+    try testing.expectError(error.InvalidFlagSettings, Header.decode(&reader));
+}
+
+test "header decode - update with invalid AD flag" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    // UPDATE header with AD=1 (invalid for UPDATE)
+    const invalid_header = [_]u8{
+        0x12, 0x34, // Transaction ID
+        0x28, 0x20, // Flags: QR=0, OPCODE=5, AD=1 (invalid)
+        0x00, 0x01, // ZOCOUNT: 1
+        0x00, 0x00, // PRCOUNT: 0
+        0x00, 0x00, // UPCOUNT: 0
+        0x00, 0x00, // ADCOUNT: 0
+    };
+
+    var reader = try pool.getReader(.{ .fixed = &invalid_header });
+    defer reader.deinit();
+
+    try testing.expectError(error.InvalidFlagSettings, Header.decode(&reader));
+}
+
+test "header decode - update with multiple zones" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    // UPDATE header with ZOCOUNT=2 (invalid, must be 1)
+    const invalid_header = [_]u8{
+        0x12, 0x34, // Transaction ID
+        0x28, 0x00, // Flags: QR=0, OPCODE=5
+        0x00, 0x02, // ZOCOUNT: 2 (invalid)
+        0x00, 0x00, // PRCOUNT: 0
+        0x00, 0x00, // UPCOUNT: 0
+        0x00, 0x00, // ADCOUNT: 0
+    };
+
+    var reader = try pool.getReader(.{ .fixed = &invalid_header });
+    defer reader.deinit();
+
+    try testing.expectError(error.ZoneAlreadySet, Header.decode(&reader));
+}
+
+test "header decode - truncated message" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    // Header with TC=1
+    const truncated_header = [_]u8{
+        0x12, 0x34, // Transaction ID
+        0x02, 0x00, // Flags: TC=1
+        0x00, 0x01, // numQuestions: 1
+        0x00, 0x00, // numAnswers: 0
+        0x00, 0x00, // numAuthRR: 0
+        0x00, 0x00, // numAddRR: 0
+    };
+
+    var reader = try pool.getReader(.{ .fixed = &truncated_header });
+    defer reader.deinit();
+
+    try testing.expectError(error.TruncatedMessage, Header.decode(&reader));
+}
+
+test "header decode - valid update header" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    // Valid UPDATE request header
+    const valid_header = [_]u8{
+        0xAB, 0xCD, // Transaction ID
+        0x28, 0x00, // Flags: QR=0, OPCODE=5 (UPDATE)
+        0x00, 0x01, // ZOCOUNT: 1
+        0x00, 0x02, // PRCOUNT: 2
+        0x00, 0x03, // UPCOUNT: 3
+        0x00, 0x04, // ADCOUNT: 4
+    };
+
+    var reader = try pool.getReader(.{ .fixed = &valid_header });
+    defer reader.deinit();
+
+    const header = try Header.decode(&reader);
+
+    try testing.expectEqual(@as(u16, 0xABCD), header.transactionID);
+    try testing.expect(header.flags.OPCODE == .update);
+    try testing.expectEqual(@as(u16, 1), header.numQuestions);
+    try testing.expectEqual(@as(u16, 2), header.numAnswers);
+    try testing.expectEqual(@as(u16, 3), header.numAuthRR);
+    try testing.expectEqual(@as(u16, 4), header.numAddRR);
+}
+
+test "header decode - valid update response" {
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    // Valid UPDATE response header with RCODE
+    const valid_header = [_]u8{
+        0xAB, 0xCD, // Transaction ID
+        0xA8, 0x05, // Flags: QR=1, OPCODE=5, RCODE=5 (REFUSED)
+        0x00, 0x01, // ZOCOUNT: 1
+        0x00, 0x00, // PRCOUNT: 0
+        0x00, 0x00, // UPCOUNT: 0
+        0x00, 0x00, // ADCOUNT: 0
+    };
+
+    var reader = try pool.getReader(.{ .fixed = &valid_header });
+    defer reader.deinit();
+
+    const header = try Header.decode(&reader);
+
+    try testing.expectEqual(true, header.flags.QR);
+    try testing.expect(header.flags.OPCODE == .update);
+    try testing.expect(header.flags.RCODE == .refused);
+}
+
+test "addAuthority - adds authority RR" {
+    const Name = @import("Name.zig");
+
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    var message = Message.updateRequest(&pool, 0x1234);
+    defer message.deinit();
+
+    const record = Record{
+        .memory = &pool,
+        .name = try Name.fromStr("test.example.com."),
+        .type = .A,
+        .class = .IN,
+        .ttl = 3600,
+        .rdata = .{ .A = .{ 1, 2, 3, 4 } },
+    };
+
+    try message.addAuthority(record);
+
+    try testing.expectEqual(@as(u16, 1), message.header.numAuthRR);
+    try testing.expectEqual(@as(usize, 1), message.authority.items.len);
+}
+
+test "encode/decode round trip - update message" {
+    const Name = @import("Name.zig");
+
+    var pool = try DNSMemory.init();
+    defer pool.deinit();
+
+    // Create UPDATE request
+    var original = Message.updateRequest(&pool, 0x5678);
+    defer original.deinit();
+
+    // Add zone
+    const zone = Question{
+        .memory = &pool,
+        .name = try Name.fromStr("example.com."),
+        .type = .SOA,
+        .class = .IN,
+    };
+    try original.addQuestion(zone);
+
+    // Add update RR
+    const record = Record{
+        .memory = &pool,
+        .name = try Name.fromStr("test.example.com."),
+        .type = .A,
+        .class = .IN,
+        .ttl = 3600,
+        .rdata = .{ .A = .{ 10, 20, 30, 40 } },
+    };
+    try original.addAuthority(record);
+
+    // Encode
+    var buf: [512]u8 = undefined;
+    var writer = try pool.getWriter(.{ .fixed = &buf });
+    defer writer.deinit();
+
+    try original.encode(&writer);
+
+    // Decode
+    const encoded = writer.writer.buffered();
+    var reader = try pool.getReader(.{ .fixed = encoded });
+    defer reader.deinit();
+
+    var decoded = try Message.decode(&reader);
+    defer decoded.deinit();
+
+    // Verify
+    try testing.expectEqual(original.header.transactionID, decoded.header.transactionID);
+    try testing.expectEqual(@as(u16, @bitCast(original.header.flags)), @as(u16, @bitCast(decoded.header.flags)));
+    try testing.expectEqual(original.header.numQuestions, decoded.header.numQuestions);
+    try testing.expectEqual(original.header.numAuthRR, decoded.header.numAuthRR);
+    try testing.expectEqual(original.questions.items.len, decoded.questions.items.len);
+    try testing.expectEqual(original.authority.items.len, decoded.authority.items.len);
+}
+
+test "update flags bit layout - OPCODE position" {
+    // Verify OPCODE=5 (UPDATE) is correctly positioned
+    // UPDATE opcode should produce 0x28 in the high byte
+    const flags = Header.Flags{
+        .QR = false,
+        .OPCODE = .update,
+    };
+
+    const flagsInt: u16 = @bitCast(flags);
+    try testing.expectEqual(@as(u16, 0x2800), flagsInt);
+}
+
+test "update flags bit layout - response with NOTAUTH" {
+    // Response with NOTAUTH error: QR=1, OPCODE=5, RCODE=9
+    const flags = Header.Flags{
+        .QR = true,
+        .OPCODE = .update,
+        .RCODE = .notAuth,
+    };
+
+    const flagsInt: u16 = @bitCast(flags);
+    try testing.expectEqual(@as(u16, 0xA809), flagsInt);
 }

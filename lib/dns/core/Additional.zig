@@ -97,9 +97,60 @@ pub fn encode(self: *Additional, writer: *DNSWriter) !void {
     }
 }
 
+pub fn decode(reader: *DNSReader) !Additional {
+    var record = try Record.decode(reader);
+    errdefer record.deinit();
+
+    if (record.class != .ANY) {
+        return error.IncorrectClass;
+    }
+
+    if (record.rdata != .Other) {
+        return error.InvalidDataType;
+    }
+
+    const adata: AData = switch (record.type) {
+        .TSIG => blk: {
+            var algorithm = try Name.decode(reader);
+            errdefer algorithm.deinit();
+
+            const time = reader.reader.takeInt(u48, .big) catch return error.NotEnoughBytes;
+            const fudge = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
+            const macLen = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
+            const mac_slice = reader.reader.take(macLen) catch return error.NotEnoughBytes;
+
+            // Duplicate the MAC so we own it
+            const mac = try reader.memory.alloc().dupe(u8, mac_slice);
+            errdefer reader.memory.alloc().free(mac);
+
+            const id = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
+            const rcode = try ExtendedResponseCode.decode(reader);
+            const otherLen = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
+
+            break :blk AData{ .TSIG = .{
+                .algorithm = algorithm,
+                .timeSigned = time,
+                .fudge = fudge,
+                .mac = mac,
+                .originalID = id,
+                .rcode = rcode,
+                .otherLen = otherLen,
+            } };
+        },
+        else => return error.UnsupportedAdditionalType,
+    };
+
+    return .{
+        .memory = reader.memory,
+        ._inner = record,
+        ._adata = adata,
+    };
+}
+
 pub fn deinit(self: *Additional) void {
     switch (self._adata) {
         .TSIG => |*data| {
+            data.algorithm.deinit();
             self.memory.alloc().free(data.mac);
         },
     }
@@ -738,4 +789,279 @@ test "TSIG encode - transaction ID boundary values" {
         const id_offset = 3 + 2 + 2 + 4 + 2 + 13 + 6 + 2 + 2 + 1;
         try testing.expectEqual(id, std.mem.readInt(u16, written[id_offset..][0..2], .big));
     }
+}
+
+//--------------------------------------------------
+// Decode Tests
+
+// Test data for TSIG decoding
+const tsig_test_data = struct {
+    // TSIG record with hmac-sha256, 4-byte MAC
+    // keyname: "test.", algorithm: "hmac-sha256.", fudge: 300, mac: 0xDEADBEEF
+    // originalID: 0x1234, rcode: NOERROR, otherLen: 0
+    const basic_tsig = [_]u8{
+        // Key name "test."
+        4,    't',  'e',  's',  't',  0,
+        // TYPE = TSIG (250)
+        0x00, 0xFA,
+        // CLASS = ANY (255)
+        0x00, 0xFF,
+        // TTL = 0
+        0x00, 0x00,
+        0x00, 0x00,
+        // RDLENGTH = 33
+        0x00, 0x21,
+        // Algorithm "hmac-sha256."
+        11,   'h',
+        'm',  'a',  'c',  '-',  's',  'h',
+        'a',  '2',  '5',  '6',  0,
+        // Time signed (48-bit): 0x000000000001
+           0x00,
+        0x00, 0x00, 0x00, 0x00, 0x01,
+        // Fudge: 300
+        0x01,
+        0x2C,
+        // MAC size: 4
+        0x00, 0x04,
+        // MAC
+        0xDE, 0xAD, 0xBE,
+        0xEF,
+        // Original ID
+        0x12, 0x34,
+        // Error: NOERROR (0)
+        0x00, 0x00,
+        // Other length: 0
+        0x00,
+        0x00,
+    };
+
+    // TSIG with BADSIG error and empty MAC
+    const error_tsig = [_]u8{
+        // Key name "key."
+        3,    'k',  'e',  'y',  0,
+        // TYPE = TSIG (250)
+        0x00, 0xFA,
+        // CLASS = ANY (255)
+        0x00, 0xFF,
+        // TTL = 0
+        0x00,
+        0x00, 0x00, 0x00,
+        // RDLENGTH = 29 (no MAC)
+        0x00, 0x1D,
+        // Algorithm "hmac-sha256."
+        11,   'h',  'm',  'a',  'c',
+        '-',  's',  'h',  'a',  '2',
+        '5',  '6',  0,
+        // Time signed
+           0x00, 0x00,
+        0x65, 0xA1, 0xB2, 0xC3,
+        // Fudge: 300
+        0x01,
+        0x2C,
+        // MAC size: 0
+        0x00, 0x00,
+        // (no MAC data)
+        // Original ID
+        0xAB, 0xCD,
+        // Error: BADSIG (16)
+        0x00, 0x10,
+        // Other length: 0
+        0x00, 0x00,
+    };
+
+    // TSIG with 32-byte MAC (SHA-256)
+    const sha256_tsig = [_]u8{
+        // Key name "mykey."
+        5,    'm',  'y',  'k',  'e',  'y',  0,
+        // TYPE = TSIG (250)
+        0x00, 0xFA,
+        // CLASS = ANY (255)
+        0x00, 0xFF,
+        // TTL = 0
+        0x00, 0x00, 0x00,
+        0x00,
+        // RDLENGTH = 61
+        0x00, 0x3D,
+        // Algorithm "hmac-sha256."
+        11,   'h',  'm',  'a',
+        'c',  '-',  's',  'h',  'a',  '2',  '5',
+        '6',  0,
+        // Time signed
+           0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01,
+        // Fudge: 300
+        0x01, 0x2C,
+        // MAC size: 32
+        0x00, 0x20,
+        // MAC (32 bytes)
+        0x01, 0x02,
+        0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+        0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+        0x1F, 0x20,
+        // Original ID
+        0xBE, 0xEF,
+        // Error: NOERROR (0)
+        0x00, 0x00,
+        // Other length: 0
+        0x00,
+        0x00,
+    };
+};
+
+test "TSIG decode - basic TSIG record" {
+    var memory = try DNSMemory.init();
+    defer memory.deinit();
+
+    var reader = try memory.getReader(.{ .fixed = &tsig_test_data.basic_tsig });
+    defer reader.deinit();
+
+    var additional = try Additional.decode(&reader);
+    defer additional.deinit();
+
+    // Verify inner record
+    try testing.expect(additional._inner.type == .TSIG);
+    try testing.expect(additional._inner.class == .ANY);
+    try testing.expectEqual(@as(u32, 0), additional._inner.ttl);
+
+    // Verify key name
+    const keyName = try std.fmt.allocPrint(testing.allocator, "{f}", .{&additional._inner.name});
+    defer testing.allocator.free(keyName);
+    try testing.expectEqualStrings("test.", keyName);
+
+    // Verify TSIG data
+    switch (additional._adata) {
+        .TSIG => |tsig| {
+            // Verify algorithm
+            const algoName = try std.fmt.allocPrint(testing.allocator, "{f}", .{&tsig.algorithm});
+            defer testing.allocator.free(algoName);
+            try testing.expectEqualStrings("hmac-sha256.", algoName);
+
+            try testing.expectEqual(@as(u48, 1), tsig.timeSigned);
+            try testing.expectEqual(@as(u16, 300), tsig.fudge);
+            try testing.expectEqualSlices(u8, &[_]u8{ 0xDE, 0xAD, 0xBE, 0xEF }, tsig.mac);
+            try testing.expectEqual(@as(u16, 0x1234), tsig.originalID);
+            try testing.expect(tsig.rcode == .noError);
+            try testing.expectEqual(@as(u16, 0), tsig.otherLen);
+        },
+    }
+}
+
+test "TSIG decode - error response with BADSIG" {
+    var memory = try DNSMemory.init();
+    defer memory.deinit();
+
+    var reader = try memory.getReader(.{ .fixed = &tsig_test_data.error_tsig });
+    defer reader.deinit();
+
+    var additional = try Additional.decode(&reader);
+    defer additional.deinit();
+
+    switch (additional._adata) {
+        .TSIG => |tsig| {
+            try testing.expectEqual(@as(usize, 0), tsig.mac.len);
+            try testing.expectEqual(@as(u16, 0xABCD), tsig.originalID);
+            try testing.expect(tsig.rcode == .badSig);
+            try testing.expectEqual(@as(u48, 0x0000_65A1_B2C3), tsig.timeSigned);
+        },
+    }
+}
+
+test "TSIG decode - 32-byte MAC" {
+    var memory = try DNSMemory.init();
+    defer memory.deinit();
+
+    var reader = try memory.getReader(.{ .fixed = &tsig_test_data.sha256_tsig });
+    defer reader.deinit();
+
+    var additional = try Additional.decode(&reader);
+    defer additional.deinit();
+
+    // Verify key name
+    const keyName = try std.fmt.allocPrint(testing.allocator, "{f}", .{&additional._inner.name});
+    defer testing.allocator.free(keyName);
+    try testing.expectEqualStrings("mykey.", keyName);
+
+    switch (additional._adata) {
+        .TSIG => |tsig| {
+            try testing.expectEqual(@as(usize, 32), tsig.mac.len);
+            try testing.expectEqual(@as(u16, 0xBEEF), tsig.originalID);
+
+            // Verify MAC contents
+            const expected_mac = [_]u8{
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+                0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+                0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
+            };
+            try testing.expectEqualSlices(u8, &expected_mac, tsig.mac);
+        },
+    }
+}
+
+test "TSIG decode/encode round trip" {
+    var memory = try DNSMemory.init();
+    defer memory.deinit();
+
+    // Decode
+    var reader = try memory.getReader(.{ .fixed = &tsig_test_data.basic_tsig });
+    defer reader.deinit();
+
+    var additional = try Additional.decode(&reader);
+    defer additional.deinit();
+
+    // Encode
+    var buf: [512]u8 = undefined;
+    var writer = try memory.getWriter(.{ .fixed = &buf });
+    defer writer.deinit();
+
+    try additional.encode(&writer);
+
+    // Compare
+    try testing.expectEqualSlices(u8, &tsig_test_data.basic_tsig, writer.writer.buffered());
+}
+
+test "TSIG decode/encode round trip - error response" {
+    var memory = try DNSMemory.init();
+    defer memory.deinit();
+
+    // Decode
+    var reader = try memory.getReader(.{ .fixed = &tsig_test_data.error_tsig });
+    defer reader.deinit();
+
+    var additional = try Additional.decode(&reader);
+    defer additional.deinit();
+
+    // Encode
+    var buf: [512]u8 = undefined;
+    var writer = try memory.getWriter(.{ .fixed = &buf });
+    defer writer.deinit();
+
+    try additional.encode(&writer);
+
+    // Compare
+    try testing.expectEqualSlices(u8, &tsig_test_data.error_tsig, writer.writer.buffered());
+}
+
+test "TSIG decode/encode round trip - 32-byte MAC" {
+    var memory = try DNSMemory.init();
+    defer memory.deinit();
+
+    // Decode
+    var reader = try memory.getReader(.{ .fixed = &tsig_test_data.sha256_tsig });
+    defer reader.deinit();
+
+    var additional = try Additional.decode(&reader);
+    defer additional.deinit();
+
+    // Encode
+    var buf: [512]u8 = undefined;
+    var writer = try memory.getWriter(.{ .fixed = &buf });
+    defer writer.deinit();
+
+    try additional.encode(&writer);
+
+    // Compare
+    try testing.expectEqualSlices(u8, &tsig_test_data.sha256_tsig, writer.writer.buffered());
 }

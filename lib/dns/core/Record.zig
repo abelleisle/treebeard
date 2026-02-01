@@ -142,6 +142,7 @@ pub fn decode(reader: *DNSReader) !Record {
             const owned = try reader.memory.alloc().dupe(u8, data);
             break :blk RData{ .TXT = owned };
         },
+        .TSIG => .Other,
         else => blk: {
             const data = try reader.reader.take(rdlength);
             const owned = try reader.memory.alloc().dupe(u8, data);
