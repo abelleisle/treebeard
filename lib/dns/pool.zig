@@ -38,12 +38,12 @@ const PoolType = union(enum) {
 const UDPMessagePool = struct {
     pool: UDPBufPool,
 
-    pub fn init(allocator: Allocator) UDPMessagePool {
-        return UDPMessagePool{ .pool = UDPBufPool.init(allocator) };
+    pub fn init() UDPMessagePool {
+        return UDPMessagePool{ .pool = UDPBufPool.empty };
     }
 
-    pub fn deinit(self: *UDPMessagePool) void {
-        self.pool.deinit();
+    pub fn deinit(self: *UDPMessagePool, allocator: Allocator) void {
+        self.pool.deinit(allocator);
     }
 
     /// Allocate multiple UDP message buffers at once
@@ -62,7 +62,7 @@ const UDPMessagePool = struct {
         }
 
         while (i < count) : (i += 1) {
-            buffers[i] = try self.pool.create();
+            buffers[i] = try self.pool.create(allocator);
         }
 
         return buffers;
@@ -109,18 +109,18 @@ pub const DNSMemory = struct {
 
         // Pools need an allocator that supports individual frees,
         // so use the same base allocator
-        const pool_allocator = base_allocator;
+        // const pool_allocator = base_allocator;
 
         // Get random value to seed our psrng
-        var seed: u64 = undefined;
-        try std.posix.getrandom(std.mem.asBytes(&seed));
+        const now = try std.time.Instant.now();
+        const seed: u64 = @intCast(now.timestamp.sec);
 
         return DNSMemory{
             .arena = arena,
             ._allocator = base_allocator,
             ._rand = std.Random.DefaultPrng.init(seed),
             .pools = .{
-                .udp = UDPMessagePool.init(pool_allocator),
+                .udp = UDPMessagePool.init(),
             },
             .preheated = false,
         };
@@ -128,7 +128,7 @@ pub const DNSMemory = struct {
 
     pub fn deinit(self: *DNSMemory) void {
         // Free child pools
-        self.pools.udp.deinit();
+        self.pools.udp.deinit(self.alloc());
 
         // Free arena allocator
         self.arena.deinit();
@@ -140,7 +140,7 @@ pub const DNSMemory = struct {
         }
         self.preheated = true;
 
-        try self.pools.udp.pool.preheat(options.udp);
+        try self.pools.udp.pool.addCapacity(self.alloc(), options.udp);
     }
 
     pub inline fn alloc(self: *DNSMemory) Allocator {
@@ -165,7 +165,7 @@ pub const DNSMemory = struct {
     pub fn getReader(self: *DNSMemory, readerType: ReaderType) !DNSReader {
         switch (readerType) {
             .udp => {
-                const buf = try self.pools.udp.pool.create();
+                const buf = try self.pools.udp.pool.create(self.alloc());
                 return DNSReader{
                     .reader = Reader.fixed(buf),
                     .readerType = ReaderInnerType{ .udp = buf },
@@ -185,7 +185,7 @@ pub const DNSMemory = struct {
     pub fn getWriter(self: *DNSMemory, writerType: WriterType) !DNSWriter {
         switch (writerType) {
             .udp => {
-                const buf = try self.pools.udp.pool.create();
+                const buf = try self.pools.udp.pool.create(self.alloc());
                 return DNSWriter{
                     .writer = Writer.fixed(buf),
                     .writerType = WriterInnerType{ .udp = buf },
@@ -282,14 +282,14 @@ test "create main pool" {
 }
 
 test "udp pool create two buffers with test allocator" {
-    var udp_pool = UDPBufPool.init(testing.allocator);
-    defer udp_pool.deinit();
+    var udp_pool = UDPBufPool.empty;
+    defer udp_pool.deinit(testing.allocator);
 
-    const buf1 = try udp_pool.create();
+    const buf1 = try udp_pool.create(testing.allocator);
     buf1[0] = 42;
     try testing.expectEqual(42, buf1[0]);
 
-    const buf2 = try udp_pool.create();
+    const buf2 = try udp_pool.create(testing.allocator);
     buf2[0] = 43;
     try testing.expectEqual(43, buf2[0]);
 
@@ -323,11 +323,11 @@ test "udp pool create two buffers" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    const buf1 = try pool.pools.udp.pool.create();
+    const buf1 = try pool.pools.udp.pool.create(pool.alloc());
     buf1[0] = 42;
     try testing.expectEqual(42, buf1[0]);
 
-    const buf2 = try pool.pools.udp.pool.create();
+    const buf2 = try pool.pools.udp.pool.create(pool.alloc());
     buf2[0] = 43;
     try testing.expectEqual(43, buf2[0]);
 

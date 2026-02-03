@@ -34,9 +34,8 @@ pub fn decode(reader: *DNSReader) !Question {
     var name = try Name.decode(reader);
     errdefer name.deinit();
 
-    // TODO: make sure type and class are valid values
-    const typeRR: codes.Type = try std.meta.intToEnum(codes.Type, try reader.reader.takeInt(u16, .big));
-    const classRR: codes.Class = try std.meta.intToEnum(codes.Class, try reader.reader.takeInt(u16, .big));
+    const typeRR = try codes.Type.decode(reader);
+    const classRR = try codes.Class.decode(reader);
 
     return Question{
         .memory = reader.memory,

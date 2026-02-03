@@ -113,7 +113,7 @@ pub const Type = enum(u16) {
     /// Decode Record type from encoded DNS format
     pub fn decode(reader: *DNSReader) !Type {
         const typeInt: u16 = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
-        const typeEnum: Type = std.meta.intToEnum(Type, typeInt) catch return error.InvalidType;
+        const typeEnum: Type = std.enums.fromInt(Type, typeInt) orelse return error.InvalidType;
         return typeEnum;
     }
 
@@ -155,7 +155,7 @@ pub const Class = enum(u16) {
     /// Decode Record class from encoded DNS format
     pub fn decode(reader: *DNSReader) !Class {
         const classInt: u16 = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
-        const classEnum: Class = std.meta.intToEnum(Class, classInt) catch return error.InvalidClass;
+        const classEnum: Class = std.enums.fromInt(Class, classInt) orelse return error.InvalidClass;
         return classEnum;
     }
 

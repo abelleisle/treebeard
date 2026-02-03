@@ -2,7 +2,7 @@
 const std = @import("std");
 
 // networking
-const net = std.net;
+const net = std.Io.net;
 const posix = std.posix;
 
 // Core
@@ -21,6 +21,13 @@ const RecordList = treebeard.RecordList;
 
 // recv packets in a loop and ack them until we recv an EoT
 pub fn recv_loop(memory: *DNSMemory) !void {
+    var threaded: std.Io.Threaded = .init(memory.alloc(), .{
+        .environ = .empty,
+    });
+    defer threaded.deinit();
+
+    const io = threaded.io();
+
     const baseName = try Name.fromStr("");
     var zone = try Zone.initDict(memory, baseName);
     defer zone.deinit();
@@ -103,20 +110,13 @@ pub fn recv_loop(memory: *DNSMemory) !void {
     }
 
     // const receiver = try net.Address.parseIp6("::1", 9091);
-    const receiver = net.Address.initIp4(.{ 127, 0, 0, 1 }, 9091);
-    // const receiver = try net.Address.parseIp6("::1", 9091);
-    const sock = try posix.socket(
-        posix.AF.INET,
-        posix.SOCK.DGRAM,
-        posix.IPPROTO.UDP,
-    );
+    const receiver = net.Ip4Address{ .bytes = .{ 127, 0, 0, 1 }, .port = 9091 };
+    const ip = net.IpAddress{ .ip4 = receiver };
+    const sock = try ip.bind(io, .{ .ip6_only = false, .mode = .dgram, .protocol = .udp });
 
-    try std.posix.bind(sock, @ptrCast(&receiver.any), receiver.in.getOsSockLen());
+    defer sock.close(io);
 
     // var expected_seq: u32 = 0;
-
-    var addr: std.posix.sockaddr = undefined;
-    var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr);
 
     var requests: usize = 0;
     while (true) {
@@ -124,11 +124,8 @@ pub fn recv_loop(memory: *DNSMemory) !void {
         defer reader.deinit();
         const buf = reader.reader.buffer;
 
-        const ret = try posix.recvfrom(sock, @constCast(buf), 0, &addr, &addr_len);
-        if (ret == 0) {
-            // This shouldn't be possible since the socket is blocking, but lets just be safe.
-            continue;
-        }
+        const incoming = try sock.receive(io, buf);
+        if (incoming.data.len == 0) continue;
 
         var message = try Message.decode(&reader);
         defer message.deinit();
@@ -147,9 +144,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
         };
 
         try message.encode(&writer);
-        _ = posix.sendto(sock, writer.writer.buffered(), 0, &addr, addr_len) catch |e| {
-            return e;
-        };
+        try sock.send(io, &incoming.from, writer.writer.buffered());
 
         requests += 1;
         std.debug.print("\rRequests: {d}", .{requests});

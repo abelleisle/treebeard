@@ -7,9 +7,9 @@ const treebeard = @import("treebeard");
 const udp = @import("transport/udp.zig");
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    // const allocator = std.heap.page_allocator;
+    // const args = try std.process.argsAlloc(allocator);
+    // defer std.process.argsFree(allocator, args);
 
     var pool = try treebeard.DNSMemory.init();
     defer pool.deinit();
