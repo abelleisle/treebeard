@@ -142,7 +142,7 @@ pub const ExtendedResponseCode = enum(u16) {
     /// Decode ExtendedResponseCode from encoded DNS format
     pub fn decode(reader: *DNSReader) !ExtendedResponseCode {
         const rcodeInt: u16 = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
-        const rcodeEnum: ExtendedResponseCode = std.meta.intToEnum(ExtendedResponseCode, rcodeInt) catch return error.InvalidExtendedRCode;
+        const rcodeEnum: ExtendedResponseCode = std.enums.fromInt(ExtendedResponseCode, rcodeInt) orelse return error.InvalidExtendedRCode;
         return rcodeEnum;
     }
 

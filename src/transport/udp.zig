@@ -157,7 +157,7 @@ fn handle_message(memory: *DNSMemory, zone: *Zone, message: *Message) !void {
     message.header.flags.AD = false;
     message.header.numAddRR = 0;
     if (message.header.flags.RD) {
-        for (message.questions.items) |*question| {
+        if (message.question) |*question| {
             const answers = try zone.query(&question.name, question.type, question.class);
             if (answers) |answer| {
                 const len = answer.items.len;

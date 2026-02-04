@@ -49,7 +49,7 @@ pub fn deinit(self: *Question) void {
     self.name.deinit();
 }
 
-pub fn encode(self: *Question, writer: *DNSWriter) !void {
+pub fn encode(self: *const Question, writer: *DNSWriter) !void {
     try self.name.encode(writer);
     try writer.writer.writeInt(u16, @intFromEnum(self.type), .big);
     try writer.writer.writeInt(u16, @intFromEnum(self.class), .big);

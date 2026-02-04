@@ -29,7 +29,7 @@ memory: *DNSMemory,
 header: Header,
 
 /// List of messages
-questions: ArrayList(Question),
+question: ?Question,
 
 /// List of records
 answers: ArrayList(Record),
@@ -54,7 +54,7 @@ pub fn init(memory: *DNSMemory, transactionID: u16, flags: Header.Flags) Message
             .numAuthRR = 0,
             .numAddRR = 0,
         },
-        .questions = ArrayList(Question).empty,
+        .question = null,
         .answers = ArrayList(Record).empty,
         .authority = ArrayList(Record).empty,
         .additional = ArrayList(Additional).empty,
@@ -86,7 +86,7 @@ pub fn updateRequest(memory: *DNSMemory, transactionID: u16) Message {
             .numAuthRR = 0,
             .numAddRR = 0,
         },
-        .questions = ArrayList(Question).empty,
+        .question = null,
         .answers = ArrayList(Record).empty,
         .authority = ArrayList(Record).empty,
         .additional = ArrayList(Additional).empty,
@@ -118,7 +118,7 @@ pub fn updateResponse(memory: *DNSMemory, transactionID: u16) Message {
             .numAuthRR = 0,
             .numAddRR = 0,
         },
-        .questions = ArrayList(Question).empty,
+        .question = null,
         .answers = ArrayList(Record).empty,
         .authority = ArrayList(Record).empty,
         .additional = ArrayList(Additional).empty,
@@ -133,13 +133,16 @@ pub inline fn isUpdate(self: *const Message) bool {
 /// Adds the provided question to our message
 /// Note: When this message is an update, this refers to ZOCOUNT
 pub fn addQuestion(self: *Message, question: Question) !void {
-    // Updates can only have a single zone specified
-    if (self.isUpdate() and (self.header.numQuestions > 0)) {
-        return error.ZoneAlreadySet;
+    if (self.question != null) {
+        if (self.isUpdate()) {
+            return error.ZoneAlreadySet;
+        } else {
+            return error.QuestionAlreadySet;
+        }
     }
 
-    try self.questions.append(self.memory.alloc(), question);
-    self.header.numQuestions += 1;
+    self.header.numQuestions = 1;
+    self.question = question;
 }
 
 /// Adds the provided answer (record) to our message
@@ -167,11 +170,12 @@ pub fn decode(reader: *DNSReader) !Message {
     const alloc = reader.memory.alloc();
     const header = try Header.decode(reader);
 
-    var questions = try parse_questions(alloc, reader, header.numQuestions);
-    errdefer {
-        for (questions.items) |*q| q.deinit();
-        questions.deinit(alloc);
-    }
+    const question = if (header.numQuestions > 1)
+        return error.TooManyQuestions
+    else if (header.numQuestions == 1)
+        try Question.decode(reader)
+    else
+        null;
 
     var answers = try parse_records(alloc, reader, header.numAnswers);
     errdefer {
@@ -191,29 +195,11 @@ pub fn decode(reader: *DNSReader) !Message {
     return Message{
         .memory = reader.memory,
         .header = header,
-        .questions = questions,
+        .question = question,
         .answers = answers,
         .authority = authorities,
         .additional = additional,
     };
-}
-
-/// Parse questions from message bytes
-/// Note: This must be done AFTER parsing the header
-fn parse_questions(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Question) {
-    var questions = try ArrayList(Question).initCapacity(alloc, count);
-    errdefer {
-        for (questions.items) |*q| q.deinit();
-        questions.deinit(alloc);
-    }
-
-    var i: u16 = 0;
-    while (i < count) : (i += 1) {
-        const q = try Question.decode(reader);
-        try questions.append(alloc, q);
-    }
-
-    return questions;
 }
 
 /// Parse records from message bytes
@@ -253,8 +239,7 @@ fn parse_additional(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList
 }
 
 pub fn deinit(self: *Message) void {
-    for (self.questions.items) |*q| q.deinit();
-    self.questions.deinit(self.memory.alloc());
+    if (self.question) |*q| q.deinit();
 
     for (self.answers.items) |*a| a.deinit();
     self.answers.deinit(self.memory.alloc());
@@ -268,7 +253,7 @@ pub fn deinit(self: *Message) void {
 
 pub fn encode(self: *const Message, writer: *DNSWriter) !void {
     try self.header.encode(writer);
-    for (self.questions.items) |*q| {
+    if (self.question) |*q| {
         try q.encode(writer);
     }
     for (self.answers.items) |*a| {
@@ -378,6 +363,10 @@ pub const Header = packed struct(u96) {
                 (header.flags.CD == true))
             {
                 return error.InvalidFlagSettings;
+            }
+        } else {
+            if (header.numQuestions > 1) {
+                return error.QuestionAlreadySet;
             }
         }
 
@@ -517,7 +506,7 @@ test "message parse" {
     defer message.deinit();
 
     try testing.expectEqual(1, message.header.numQuestions);
-    try testing.expectEqual(1, message.questions.items.len);
+    try testing.expect(message.question != null);
 }
 
 test "basic encode" {
@@ -635,7 +624,7 @@ test "addQuestion - update rejects multiple zones" {
     try testing.expectError(error.ZoneAlreadySet, message.addQuestion(zone2));
 }
 
-test "addQuestion - regular query allows multiple questions" {
+test "addQuestion - regular query bans multiple questions" {
     const Name = @import("Name.zig");
 
     var pool = try DNSMemory.init();
@@ -659,9 +648,8 @@ test "addQuestion - regular query allows multiple questions" {
     };
 
     try message.addQuestion(q1);
-    try message.addQuestion(q2);
-
-    try testing.expectEqual(@as(u16, 2), message.header.numQuestions);
+    try testing.expectEqual(error.QuestionAlreadySet, message.addQuestion(q2));
+    try testing.expectEqual(@as(u16, 1), message.header.numQuestions);
 }
 
 test "header decode - update with invalid AA flag" {
@@ -889,7 +877,7 @@ test "encode/decode round trip - update message" {
     try testing.expectEqual(@as(u16, @bitCast(original.header.flags)), @as(u16, @bitCast(decoded.header.flags)));
     try testing.expectEqual(original.header.numQuestions, decoded.header.numQuestions);
     try testing.expectEqual(original.header.numAuthRR, decoded.header.numAuthRR);
-    try testing.expectEqual(original.questions.items.len, decoded.questions.items.len);
+    try testing.expectEqual(original.question, decoded.question);
     try testing.expectEqual(original.authority.items.len, decoded.authority.items.len);
 }
 
