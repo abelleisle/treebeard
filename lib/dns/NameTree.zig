@@ -106,7 +106,7 @@ fn Tree(comptime T: type, vTable: VTable) type {
 
         key: TreeKey,
         value: ?T,
-        children: ?std.StringHashMap(NT),
+        children: ?std.StringArrayHashMap(NT),
 
         freed: bool,
 
@@ -166,7 +166,7 @@ fn Tree(comptime T: type, vTable: VTable) type {
             // We need to add a child? Let's make sure we have a children
             // tree.
             if (self.children == null) {
-                self.children = std.StringHashMap(NT).init(self.memory.alloc());
+                self.children = std.StringArrayHashMap(NT).init(self.memory.alloc());
             }
 
             // Important: reference the children so we don't clone
@@ -222,9 +222,9 @@ fn Tree(comptime T: type, vTable: VTable) type {
             }
 
             if (self.children) |*c| {
-                var iter = c.valueIterator();
+                var iter = c.iterator();
                 while (iter.next()) |childValue| {
-                    childValue.deinit();
+                    childValue.value_ptr.deinit();
                 }
                 c.deinit();
                 self.children = null;
