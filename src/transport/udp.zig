@@ -32,6 +32,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
     var zone = try Zone.initDict(memory, baseName);
     defer zone.deinit();
 
+    zone.startWrite();
     // IPv4 Records
     {
         {
@@ -108,6 +109,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
             try zone.backend.dict.records.IN.AAAA.add(&record);
         }
     }
+    zone.stopWrite();
 
     // const receiver = try net.Address.parseIp6("::1", 9091);
     const receiver = net.Ip4Address{ .bytes = .{ 127, 0, 0, 1 }, .port = 9091 };
@@ -158,7 +160,7 @@ fn handle_message(memory: *DNSMemory, zone: *Zone, message: *Message) !void {
     message.header.numAddRR = 0;
     if (message.header.flags.RD) {
         if (message.question) |*question| {
-            const answers = try zone.query(&question.name, question.type, question.class);
+            const answers = try zone.query(question);
             if (answers) |answer| {
                 const len = answer.items.len;
                 const start = memory.randRange(usize, 0, len);

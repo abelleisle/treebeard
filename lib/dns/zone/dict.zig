@@ -8,6 +8,7 @@ const NameTree = treebeard.NameTree;
 
 // Types
 const RecordList = treebeard.RecordList;
+const Question = treebeard.Question;
 const Record = treebeard.Record;
 const Type = treebeard.Type;
 const Class = treebeard.Class;
@@ -50,15 +51,15 @@ pub fn deinit(self: *Self) void {
     self.records.IN.CNAME.deinit();
 }
 
-pub fn query(self: *const Self, name: *const Name, dnsType: Type, class: Class) ?*const RecordList {
-    switch (class) {
-        .IN => switch (dnsType) {
+pub fn query(self: *const Self, question: *const Question) ?*const RecordList {
+    switch (question.class) {
+        .IN => switch (question.type) {
             .A => {
-                const tree = self.records.IN.A.tree.find(name);
+                const tree = self.records.IN.A.tree.find(&question.name);
                 if (tree.value) |*v| return v else return null;
             },
             .AAAA => {
-                const tree = self.records.IN.AAAA.tree.find(name);
+                const tree = self.records.IN.AAAA.tree.find(&question.name);
                 if (tree.value) |*v| return v else return null;
             },
             else => @panic("NOT IMPLEMENTED"),
