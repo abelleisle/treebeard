@@ -170,12 +170,16 @@ pub fn decode(reader: *DNSReader) !Message {
     const alloc = reader.memory.alloc();
     const header = try Header.decode(reader);
 
-    const question = if (header.numQuestions > 1)
-        return error.TooManyQuestions
-    else if (header.numQuestions == 1)
-        try Question.decode(reader)
-    else
-        null;
+    const question = if (header.numQuestions > 1) {
+        return error.TooManyQuestions;
+    } else if (header.numQuestions == 1) blk: {
+        const q = try Question.decode(reader);
+        // Zone updates can only be
+        if ((header.flags.OPCODE == .update) and (q.type != .SOA)) {
+            return error.FormatError;
+        }
+        break :blk q;
+    } else null;
 
     var answers = try parse_records(alloc, reader, header.numAnswers);
     errdefer {
