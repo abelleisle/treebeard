@@ -164,9 +164,13 @@ fn handle_message(memory: *DNSMemory, zone: *Zone, message: *Message) !void {
                 const start = memory.randRange(usize, 0, len);
                 for (answer.items[start..len]) |a| {
                     try message.addAnswer(a);
+                    // TODO this is hacky
+                    message.answers.items[message.answers.items.len - 1].name = question.name;
                 }
                 for (answer.items[0..start]) |a| {
                     try message.addAnswer(a);
+                    // TODO this is hacky
+                    message.answers.items[message.answers.items.len - 1].name = question.name;
                 }
             } else {
                 return error.NoDomain;
