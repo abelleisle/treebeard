@@ -12,6 +12,7 @@ const Record = treebeard.Record;
 const Type = treebeard.Type;
 const Class = treebeard.Class;
 const Name = treebeard.Name;
+const Message = treebeard.Message;
 
 // Backends
 const Dict = @import("zone/dict.zig");
@@ -85,6 +86,36 @@ pub fn query(self: *const Zone, question: *const Question) Errors!?*const Record
     }
 }
 
+pub fn update(self: *Zone, updateMsg: *const Message) Errors!void {
+    // Payload is not update? That's an issue
+    if (!updateMsg.isUpdate()) {
+        return Errors.NotAnUpdate;
+    }
+
+    // Payload does not point to this zone.
+    // We don't need to validate the message itself because it's validated at
+    // creation time.
+    if (updateMsg.question) |q| {
+        if (!self.namespace.eql(q.name)) {
+            return Errors.IncorrectZone;
+        }
+    }
+
+    // Now that we know our message is valid, let's obtain a write lock
+    // so we can update the required records.
+    self.lock.lock();
+    defer self.lock.unlock();
+
+    switch (self.backend) {
+        .dict => |d| {
+            _ = d;
+        },
+        .custom => |c| {
+            _ = c;
+        },
+    }
+}
+
 /// Begin a zone write operation.
 /// This prevents zone reads from occuring during a large write operation.
 ///
@@ -101,6 +132,8 @@ pub inline fn stopWrite(self: *Zone) void {
 
 pub const Errors = error{
     QueryError,
+    IncorrectZone,
+    NotAnUpdate,
 };
 
 //--------------------------------------------------

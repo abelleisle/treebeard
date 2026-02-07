@@ -8,11 +8,13 @@ const ArrayList = std.ArrayList;
 
 // Core
 const codes = @import("codes.zig");
+const Class = codes.Class;
 const ResponseCode = codes.ResponseCode;
 const Opcode = codes.Opcode;
 const Question = @import("Question.zig");
 const Record = @import("Record.zig");
 const Additional = @import("Additional.zig");
+const Name = @import("Name.zig");
 
 const treebeard = @import("treebeard");
 const DNSMemory = treebeard.DNSMemory;
@@ -64,7 +66,7 @@ pub fn init(memory: *DNSMemory, transactionID: u16, flags: Header.Flags) Message
 /// Creates an update (RFC2136) Message for requesting a name update.
 /// Use `addQuestion`, `addAnswer`, `addAuthority`, or `addAdditional`
 /// to add content to the message.
-pub fn updateRequest(memory: *DNSMemory, transactionID: u16) Message {
+pub fn updateRequest(memory: *DNSMemory, transactionID: u16, zone: *const Name, class: ?*const Class) Message {
     return Message{
         .memory = memory,
         .header = Header{
@@ -81,12 +83,12 @@ pub fn updateRequest(memory: *DNSMemory, transactionID: u16) Message {
                 .CD = false,
                 .RCODE = .noError,
             },
-            .numQuestions = 0,
+            .numQuestions = 1,
             .numAnswers = 0,
             .numAuthRR = 0,
             .numAddRR = 0,
         },
-        .question = null,
+        .question = Question.updateZone(memory, zone, class),
         .answers = ArrayList(Record).empty,
         .authority = ArrayList(Record).empty,
         .additional = ArrayList(Additional).empty,

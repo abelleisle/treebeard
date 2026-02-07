@@ -30,6 +30,20 @@ type: Type,
 /// Class code
 class: Class,
 
+/// Create zone update question.
+///
+/// Zone refers to the target update zone.
+/// Class is the zone class. If no class is provided, will default to IN.
+/// Type is always SOA.
+pub fn updateZone(memory: *DNSReader, zone: *const Name, class: ?*const Class) Question {
+    return .{
+        .memory = memory,
+        .name = zone.*,
+        .class = class orelse .IN,
+        .type = .SOA,
+    };
+}
+
 pub fn decode(reader: *DNSReader) !Question {
     var name = try Name.decode(reader);
     errdefer name.deinit();

@@ -349,6 +349,10 @@ pub inline fn labelEql(lhs: []const u8, rhs: []const u8) bool {
     return std.mem.sql(u8, lhs, rhs);
 }
 
+pub inline fn eql(lhs: *const Name, rhs: *const Name) bool {
+    return std.mem.eql(u8, lhs.name(), rhs.name());
+}
+
 //--------------------------------------------------
 // Iterator
 

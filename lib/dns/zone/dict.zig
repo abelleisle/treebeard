@@ -13,6 +13,7 @@ const Record = treebeard.Record;
 const Type = treebeard.Type;
 const Class = treebeard.Class;
 const Name = treebeard.Name;
+const Message = treebeard.Question;
 
 //--------------------------------------------------
 // Dictionary zone backend
@@ -66,6 +67,11 @@ pub fn query(self: *const Self, question: *const Question) ?*const RecordList {
         },
         else => @panic("NOT IMPLEMENTED"),
     }
+}
+
+pub fn update(self: *const Self, updateMsg: *const Message) !void {
+    _ = self;
+    _ = updateMsg;
 }
 
 //--------------------------------------------------
