@@ -20,6 +20,7 @@ pub const RecordList = std.array_list.Aligned(Record, null);
 pub const DNSMemory = @import("pool.zig").DNSMemory;
 pub const DNSReader = @import("pool.zig").DNSReader;
 pub const DNSWriter = @import("pool.zig").DNSWriter;
+pub const Context = @import("Context.zig");
 
 pub const NameTree = @import("NameTree.zig");
 pub const Zone = @import("Zone.zig");
