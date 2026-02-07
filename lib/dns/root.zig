@@ -60,6 +60,7 @@ test {
     _ = @import("core/Record.zig");
     _ = @import("core/codes.zig");
     _ = @import("pool.zig");
+    _ = @import("Context.zig");
     _ = @import("NameTree.zig");
     _ = @import("Zone.zig");
 }
