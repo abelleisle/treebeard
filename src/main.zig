@@ -16,6 +16,7 @@ pub fn main() !void {
 
     try pool.preheat(.{
         .udp = 1024,
+        .context = 1024,
     });
 
     try udp.recv_loop(&pool);

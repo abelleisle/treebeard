@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const treebeard = @import("treebeard");
-const DNSReader = treebeard.DNSReader;
+const Context = treebeard.Context;
 const DNSWriter = treebeard.DNSWriter;
 
 //--------------------------------------------------
@@ -111,8 +111,8 @@ pub const Type = enum(u16) {
     SRV = 33,
 
     /// Decode Record type from encoded DNS format
-    pub fn decode(reader: *DNSReader) !Type {
-        const typeInt: u16 = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
+    pub fn decode(ctx: *Context) !Type {
+        const typeInt: u16 = ctx.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
         const typeEnum: Type = std.enums.fromInt(Type, typeInt) orelse return error.InvalidType;
         return typeEnum;
     }
@@ -153,8 +153,8 @@ pub const Class = enum(u16) {
     HS = 4,
 
     /// Decode Record class from encoded DNS format
-    pub fn decode(reader: *DNSReader) !Class {
-        const classInt: u16 = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
+    pub fn decode(ctx: *Context) !Class {
+        const classInt: u16 = ctx.reader.takeInt(u16, .big) catch return error.NotEnoughBytes;
         const classEnum: Class = std.enums.fromInt(Class, classInt) orelse return error.InvalidClass;
         return classEnum;
     }

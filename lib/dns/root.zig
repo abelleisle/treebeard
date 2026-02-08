@@ -35,15 +35,15 @@ const Allocator = std.mem.Allocator;
 //--------------------------------------------------
 // DNS Helpers
 
-pub fn buildQuery(memory: *DNSMemory, query: []const u8, record_type: Type) !Message {
+pub fn buildQuery(ctx: *Context, query: []const u8, record_type: Type) !Message {
     var name = try Name.fromStr(query);
     errdefer name.deinit();
 
-    const question = Question{ .memory = memory, .name = name, .class = .IN, .type = record_type };
+    const question = Question{ .name = name, .class = .IN, .type = record_type };
 
     const flags = Header.Flags{ .RD = true, .AD = true };
 
-    var message = Message.init(memory, 1234, flags);
+    var message = Message.init(ctx, 1234, flags);
     try message.addQuestion(question);
 
     return message;

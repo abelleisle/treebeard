@@ -14,15 +14,14 @@ const Question = @import("Question.zig");
 const Record = @import("Record.zig");
 
 const treebeard = @import("treebeard");
-const DNSMemory = treebeard.DNSMemory;
-const DNSReader = treebeard.DNSReader;
+const Context = treebeard.Context;
 const DNSWriter = treebeard.DNSWriter;
 
 //--------------------------------------------------
 // DNS Message
 const Message = @This();
 
-memory: *DNSMemory,
+ctx: *Context,
 
 /// Message header
 header: Header,
@@ -35,9 +34,9 @@ answers: ArrayList(Record),
 
 /// Creates an empty Message, use `addQuestion`, or `addAnswer` to actually
 /// add content to the message.
-pub fn init(memory: *DNSMemory, transactionID: u16, flags: Header.Flags) Message {
+pub fn init(ctx: *Context, transactionID: u16, flags: Header.Flags) Message {
     return Message{
-        .memory = memory,
+        .ctx = ctx,
         .header = Header{
             .transactionID = transactionID,
             .flags = flags,
@@ -53,34 +52,34 @@ pub fn init(memory: *DNSMemory, transactionID: u16, flags: Header.Flags) Message
 
 /// Adds the provided question to our message
 pub fn addQuestion(self: *Message, question: Question) !void {
-    try self.questions.append(self.memory.alloc(), question);
+    try self.questions.append(self.ctx.alloc(), question);
     self.header.numQuestions += 1;
 }
 
 /// Adds the provided answer (record) to our message
 pub fn addAnswer(self: *Message, answer: Record) !void {
-    try self.answers.append(self.memory.alloc(), answer);
+    try self.answers.append(self.ctx.alloc(), answer);
     self.header.numAnswers += 1;
 }
 
-pub fn decode(reader: *DNSReader) !Message {
-    const alloc = reader.memory.alloc();
-    const header = try Header.decode(reader);
+pub fn decode(ctx: *Context) !Message {
+    const alloc = ctx.alloc();
+    const header = try Header.decode(ctx);
 
-    var questions = try parse_questions(alloc, reader, header.numQuestions);
+    var questions = try parse_questions(alloc, ctx, header.numQuestions);
     errdefer {
         for (questions.items) |*q| q.deinit();
         questions.deinit(alloc);
     }
 
-    var answers = try parse_answers(alloc, reader, header.numAnswers);
+    var answers = try parse_answers(alloc, ctx, header.numAnswers);
     errdefer {
         for (answers.items) |*a| a.deinit();
         answers.deinit(alloc);
     }
 
     return Message{
-        .memory = reader.memory,
+        .ctx = ctx,
         .header = header,
         .questions = questions,
         .answers = answers,
@@ -89,7 +88,7 @@ pub fn decode(reader: *DNSReader) !Message {
 
 /// Parse questions from message bytes
 /// Note: This must be done AFTER parsing the header
-fn parse_questions(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Question) {
+fn parse_questions(alloc: Allocator, ctx: *Context, count: u16) !ArrayList(Question) {
     var questions = try ArrayList(Question).initCapacity(alloc, count);
     errdefer {
         for (questions.items) |*q| q.deinit();
@@ -98,7 +97,7 @@ fn parse_questions(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(
 
     var i: u16 = 0;
     while (i < count) : (i += 1) {
-        const q = try Question.decode(reader);
+        const q = try Question.decode(ctx);
         try questions.append(alloc, q);
     }
 
@@ -107,7 +106,7 @@ fn parse_questions(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(
 
 /// Parse answers from message bytes
 /// Note: This must be done AFTER parsing the header and questions
-fn parse_answers(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Record) {
+fn parse_answers(alloc: Allocator, ctx: *Context, count: u16) !ArrayList(Record) {
     var answers = try ArrayList(Record).initCapacity(alloc, count);
     errdefer {
         for (answers.items) |*a| a.deinit();
@@ -116,7 +115,7 @@ fn parse_answers(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Re
 
     var i: u16 = 0;
     while (i < count) : (i += 1) {
-        const a = try Record.decode(reader);
+        const a = try Record.decode(ctx);
         try answers.append(alloc, a);
     }
 
@@ -125,10 +124,10 @@ fn parse_answers(alloc: Allocator, reader: *DNSReader, count: u16) !ArrayList(Re
 
 pub fn deinit(self: *Message) void {
     for (self.questions.items) |*q| q.deinit();
-    self.questions.deinit(self.memory.alloc());
+    self.questions.deinit(self.ctx.alloc());
 
     for (self.answers.items) |*a| a.deinit();
-    self.answers.deinit(self.memory.alloc());
+    self.answers.deinit(self.ctx.alloc());
 }
 
 pub fn encode(self: *const Message, writer: *DNSWriter) !void {
@@ -205,14 +204,14 @@ pub const Header = packed struct(u96) {
         QR: bool = false,
     };
 
-    pub fn decode(reader: *DNSReader) !Header {
+    pub fn decode(ctx: *Context) !Header {
         const header = Header{
-            .transactionID = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
-            .flags = @bitCast(reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes),
-            .numQuestions = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
-            .numAnswers = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
-            .numAuthRR = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
-            .numAddRR = reader.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .transactionID = ctx.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .flags = @bitCast(ctx.reader.takeInt(u16, .big) catch return error.NotEnoughBytes),
+            .numQuestions = ctx.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .numAnswers = ctx.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .numAuthRR = ctx.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
+            .numAddRR = ctx.reader.takeInt(u16, .big) catch return error.NotEnoughBytes,
         };
 
         if (header.flags.TC) {
@@ -259,15 +258,13 @@ pub const Header = packed struct(u96) {
 
 const testing = std.testing;
 const t = @import("testing.zig");
+const DNSMemory = treebeard.DNSMemory;
 
 test "header bit order" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
+    var tc = try t.TestContext.init(t.data.query.duckduckgo);
+    defer tc.deinit();
 
-    var stream = try pool.getReader(.{ .fixed = t.data.query.duckduckgo });
-    defer stream.deinit();
-
-    const header = try Header.decode(&stream);
+    const header = try Header.decode(&tc.ctx);
 
     // Test transaction ID
     try testing.expectEqual(0x3e3c, header.transactionID);
@@ -293,18 +290,15 @@ test "header bit order" {
 }
 
 test "header write bit order" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
+    var tc = try t.TestContext.init(t.data.query.duckduckgo);
+    defer tc.deinit();
 
-    var stream = try pool.getReader(.{ .fixed = t.data.query.duckduckgo });
-    defer stream.deinit();
-
-    const header = try Header.decode(&stream);
+    const header = try Header.decode(&tc.ctx);
 
     // Test various destination header lengths
     inline for (.{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 56 }) |l| {
         var writeBuf = std.mem.zeroes([l]u8);
-        var writer = try pool.getWriter(.{ .fixed = &writeBuf });
+        var writer = try tc.pool.getWriter(.{ .fixed = &writeBuf });
         defer writer.deinit();
 
         if (l < Header.LENGTH) {
@@ -318,16 +312,14 @@ test "header write bit order" {
 }
 
 test "qname parsing" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
+    var tc = try t.TestContext.init(t.data.query.duckduckgo);
+    defer tc.deinit();
 
-    var stream = try pool.getReader(.{ .fixed = t.data.query.duckduckgo });
-    defer stream.deinit();
     // Parse header to make sure reader advances.
-    _ = try Header.decode(&stream);
+    _ = try Header.decode(&tc.ctx);
 
     // Parse our question
-    var question = try Question.decode(&stream);
+    var question = try Question.decode(&tc.ctx);
     defer question.deinit();
 
     // Check the easy stuff first
@@ -348,10 +340,10 @@ test "message parse" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var stream = try pool.getReader(.{ .fixed = t.data.query.duckduckgo });
-    defer stream.deinit();
+    var ctx = try Context.requestFromWireBuf(&pool, t.data.query.duckduckgo);
+    defer ctx.deinit();
 
-    var message = try Message.decode(&stream);
+    var message = try Message.decode(&ctx);
     defer message.deinit();
 
     try testing.expectEqual(1, message.header.numQuestions);
@@ -364,6 +356,9 @@ test "basic encode" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
+    var ctx = try Context.requestFromWireBuf(&pool, &[_]u8{});
+    defer ctx.deinit();
+
     var buf = std.mem.zeroes([512]u8);
     var writer = try pool.getWriter(.{ .fixed = &buf });
     defer writer.deinit();
@@ -373,13 +368,12 @@ test "basic encode" {
     errdefer name.deinit();
 
     const q = Question{
-        .memory = &pool,
         .name = name,
         .type = .A,
         .class = .IN,
     };
 
-    var message = Message.init(&pool, 0x3e3c, Header.Flags{
+    var message = Message.init(&ctx, 0x3e3c, Header.Flags{
         .QR = false,
         .OPCODE = .query,
         .AA = false,

@@ -20,11 +20,15 @@ const Allocator = mem.Allocator;
 const heap = std.heap;
 const ArenaAllocator = heap.ArenaAllocator;
 
+// DNS
+const Context = @import("Context.zig");
+
 //--------------------------------------------------
 // Types
 const UDPMessageBuffer = [512]u8;
 
 const UDPBufPool = std.heap.MemoryPool(UDPMessageBuffer);
+const ContextMemPool = std.heap.MemoryPool(Context);
 
 const PoolType = union(enum) {
     UDP,
@@ -77,8 +81,29 @@ const UDPMessagePool = struct {
     }
 };
 
+const ContextPool = struct {
+    pool: ContextMemPool,
+
+    pub fn init() ContextPool {
+        return ContextPool{ .pool = ContextMemPool.empty };
+    }
+
+    pub fn deinit(self: *ContextPool, allocator: Allocator) void {
+        self.pool.deinit(allocator);
+    }
+
+    pub fn create(self: *ContextPool, allocator: Allocator) !*Context {
+        return try self.pool.create(allocator);
+    }
+
+    pub fn destroy(self: *ContextPool, context: *Context) void {
+        return self.pool.destroy(context);
+    }
+};
+
 const PreheatOptions = struct {
     udp: u32,
+    context: u32,
 };
 
 /// Master DNS pool.
@@ -93,6 +118,7 @@ pub const DNSMemory = struct {
     // Pools
     pools: struct {
         udp: UDPMessagePool,
+        context: ContextPool,
     },
 
     preheated: bool,
@@ -121,6 +147,7 @@ pub const DNSMemory = struct {
             ._rand = std.Random.DefaultPrng.init(seed),
             .pools = .{
                 .udp = UDPMessagePool.init(),
+                .context = ContextPool.init(),
             },
             .preheated = false,
         };
@@ -129,6 +156,7 @@ pub const DNSMemory = struct {
     pub fn deinit(self: *DNSMemory) void {
         // Free child pools
         self.pools.udp.deinit(self.alloc());
+        self.pools.context.deinit(self.alloc());
 
         // Free arena allocator
         self.arena.deinit();
@@ -160,6 +188,15 @@ pub const DNSMemory = struct {
         r += low;
 
         return r;
+    }
+
+    pub fn getContext(self: *DNSMemory) !*Context {
+        return try self.pools.context.create(self.alloc());
+    }
+
+    pub fn returnContext(self: *DNSMemory, ctx: *Context) void {
+        ctx.deinit(); // Just double check that it's dealloc'd
+        self.pools.context.destroy(ctx);
     }
 
     pub fn getReader(self: *DNSMemory, readerType: ReaderType) !DNSReader {
@@ -339,13 +376,10 @@ test "udp reader and writer" {
     var pool = try DNSMemory.init();
     defer pool.deinit();
 
-    var reader = try pool.getReader(.udp);
-    defer reader.deinit();
+    var ctx = try Context.requestFromWireBuf(&pool, t.data.query.duckduckgo_simple);
+    defer ctx.deinit();
 
-    // This is pretty hacky and I don't love it
-    @memcpy(reader.reader.buffer[0..t.data.query.duckduckgo_simple.len], t.data.query.duckduckgo_simple);
-
-    var message = try Message.decode(&reader);
+    var message = try Message.decode(&ctx);
     defer message.deinit();
 
     var writer = try pool.getWriter(.udp);

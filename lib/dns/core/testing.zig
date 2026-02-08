@@ -1,3 +1,34 @@
+const treebeard = @import("treebeard");
+const DNSMemory = treebeard.DNSMemory;
+const Context = treebeard.Context;
+
+/// Test context that manages both DNSMemory and Context for testing.
+/// Use this to reduce test setup boilerplate.
+pub const TestContext = struct {
+    pool: DNSMemory,
+    ctx: Context,
+
+    /// Initialize a test context with the given buffer
+    pub fn init(buf: []const u8) !TestContext {
+        var result = TestContext{
+            .pool = try DNSMemory.init(),
+            .ctx = undefined,
+        };
+        errdefer result.pool.deinit();
+
+        // Initialize ctx after pool is in its final location
+        result.ctx = try Context.requestFromWireBuf(&result.pool, buf);
+
+        return result;
+    }
+
+    /// Deinitialize both the context and the pool
+    pub fn deinit(self: *TestContext) void {
+        self.ctx.deinit();
+        self.pool.deinit();
+    }
+};
+
 pub const data = .{
     .query = .{
         // Got this from wireshar

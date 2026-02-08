@@ -13,6 +13,7 @@ const Record = treebeard.Record;
 const Name = treebeard.Name;
 
 const DNSMemory = treebeard.DNSMemory;
+const Context = treebeard.Context;
 const Zone = treebeard.Zone;
 const RecordList = treebeard.RecordList;
 
@@ -36,7 +37,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
     {
         {
             const record = Record{
-                .memory = memory,
+                .allocator = memory.alloc(),
                 .class = .IN,
                 .type = .A,
                 .name = try Name.fromStr("*.com"),
@@ -48,7 +49,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
         }
         {
             const record = Record{
-                .memory = memory,
+                .allocator = memory.alloc(),
                 .class = .IN,
                 .type = .A,
                 .name = try Name.fromStr("google.com"),
@@ -60,7 +61,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
         }
         {
             const record = Record{
-                .memory = memory,
+                .allocator = memory.alloc(),
                 .class = .IN,
                 .type = .A,
                 .name = try Name.fromStr("google.com"),
@@ -75,7 +76,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
     {
         {
             const record = Record{
-                .memory = memory,
+                .allocator = memory.alloc(),
                 .class = .IN,
                 .type = .AAAA,
                 .name = try Name.fromStr("google.com"),
@@ -92,7 +93,7 @@ pub fn recv_loop(memory: *DNSMemory) !void {
         }
         {
             const record = Record{
-                .memory = memory,
+                .allocator = memory.alloc(),
                 .class = .IN,
                 .type = .AAAA,
                 .name = try Name.fromStr("google.com"),
@@ -120,14 +121,16 @@ pub fn recv_loop(memory: *DNSMemory) !void {
 
     var requests: usize = 0;
     while (true) {
-        var reader = try memory.getReader(.udp);
-        defer reader.deinit();
-        const buf = reader.reader.buffer;
+        var buf: [512]u8 = std.mem.zeroes([512]u8);
 
-        const incoming = try sock.receive(io, buf);
+        var context = try memory.getContext();
+        context.* = try Context.requestFromWireBuf(memory, buf[0..512]);
+        defer context.deinit();
+
+        const incoming = try sock.receive(io, &buf);
         if (incoming.data.len == 0) continue;
 
-        var message = try Message.decode(&reader);
+        var message = try Message.decode(context);
         defer message.deinit();
 
         var writer = try memory.getWriter(.udp);

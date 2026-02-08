@@ -4,10 +4,14 @@ const builtin = @import("builtin");
 // Memory
 const Allocator = std.mem.Allocator;
 
+// IO
+const io = std.Io;
+const Reader = io.Reader;
+
 // Core
 const treebeard = @import("treebeard");
 const DNSMemory = treebeard.DNSMemory;
-const DNSReader = treebeard.DNSReader;
+const Context = treebeard.Context;
 const DNSWriter = treebeard.DNSWriter;
 
 //--------------------------------------------------
@@ -110,7 +114,7 @@ pub fn fromStr(domain: []const u8) !Name {
     return result;
 }
 
-pub fn decode(reader: *DNSReader) !Name {
+pub fn decode(ctx: *Context) !Name {
     var result = Name{
         ._data = std.mem.zeroes([MAX_NAME_BUFFER]u8),
         ._labels = std.mem.zeroes([MAX_LABEL_COUNT]u8),
@@ -119,11 +123,11 @@ pub fn decode(reader: *DNSReader) !Name {
     };
     errdefer result.deinit();
 
-    const buffer = reader.reader.buffer;
-    const end = @min(buffer.len, reader.reader.end);
+    const buffer = ctx.reader.buffer;
+    const end = @min(buffer.len, ctx.reader.end);
 
-    var parse_offset: usize = reader.reader.seek; // Follows pointers
-    var reader_offset: usize = reader.reader.seek; // Tracks read progress
+    var parse_offset: usize = ctx.reader.seek; // Follows pointers
+    var reader_offset: usize = ctx.reader.seek; // Tracks read progress
     var write_pos: usize = 0;
     var label_pos: usize = 0;
 
@@ -134,7 +138,7 @@ pub fn decode(reader: *DNSReader) !Name {
         // Note: we want to take this byte early in the case we have
         //       to exit later in the function due to a parsing error.
         if (parse_offset == reader_offset) {
-            _ = try reader.reader.take(1);
+            _ = try ctx.reader.take(1);
         }
 
         switch (header.type) {
@@ -166,7 +170,7 @@ pub fn decode(reader: *DNSReader) !Name {
 
                     // Only take if we're still following a non-pointer name
                     if (parse_offset == reader_offset) {
-                        _ = try reader.reader.take(length);
+                        _ = try ctx.reader.take(length);
                         reader_offset += 1 + length;
                     }
 
@@ -181,7 +185,7 @@ pub fn decode(reader: *DNSReader) !Name {
 
                 // Only take if we're still following a non-pointer name
                 if (parse_offset == reader_offset) {
-                    _ = try reader.reader.take(1);
+                    _ = try ctx.reader.take(1);
                     // We're now diverging and following a pointer, we can
                     // stop consuming bytes from the reader and
                     // updating `reader_offset`.
@@ -234,13 +238,13 @@ pub fn format(self: *const Name, writer: anytype) !void {
 
 /// Get the length and label count of the provided name without consuming the buffer.
 /// This can be used to determine the buffer length required for `getStrFromBuffer`.
-fn getLengthFromBuffer(reader: *const DNSReader) !NameInfo {
-    const buffer = reader.reader.buffer; // Get the raw response
-    var offset: usize = reader.reader.seek;
+fn getLengthFromBuffer(reader: *const Reader) !NameInfo {
+    const buffer = reader.buffer; // Get the raw response
+    var offset: usize = reader.seek;
     var total: usize = 0;
     var num_labels: usize = 0;
 
-    const end = @min(reader.reader.end, buffer.len);
+    const end = @min(reader.end, buffer.len);
 
     while ((total < MAX_NAME_BUFFER) and (offset < end)) {
         const header: LabelHeader = @bitCast(buffer[offset]);
@@ -539,25 +543,19 @@ fn expectEqualText(expected: []const u8, dns_name: Name) !void {
 }
 
 test "length decode" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
+    var tc = try t.TestContext.init(t.data.labels.duckduckgo.encoded);
+    defer tc.deinit();
 
-    var reader = try pool.getReader(.{ .fixed = t.data.labels.duckduckgo.encoded });
-    defer reader.deinit();
-
-    const info = try getLengthFromBuffer(&reader);
+    const info = try getLengthFromBuffer(&tc.ctx.reader);
     try testing.expectEqual(15, info.bytes);
     try testing.expectEqual(2, info.label_count);
 }
 
 test "basic decode" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
+    var tc = try t.TestContext.init(t.data.labels.duckduckgo.encoded);
+    defer tc.deinit();
 
-    var reader = try pool.getReader(.{ .fixed = t.data.labels.duckduckgo.encoded });
-    defer reader.deinit();
-
-    var dns_name = try Name.decode(&reader);
+    var dns_name = try Name.decode(&tc.ctx);
     defer dns_name.deinit();
 
     try expectEqualText(t.data.labels.duckduckgo.decoded, dns_name);
@@ -567,57 +565,51 @@ test "basic decode" {
 const compressed_data = &[_]u8{ 0xcd, 0xa4, 0x05, 0x1, 0x2, 0x3, 0x4, 0x5, 0x03, 0xaa, 0xbb, 0xcc, 0x04, 0x1a, 0x2b, 0x3c, 0x4d, 0x00, 0x02, 0xab, 0xcd, 0xc0, 0x02 };
 
 test "length decode of simple compression" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
+    var tc = try t.TestContext.init(compressed_data);
+    defer tc.deinit();
 
-    var reader = try pool.getReader(.{ .fixed = compressed_data });
-    defer reader.deinit();
-
-    _ = try reader.reader.takeInt(u16, .big);
+    _ = try tc.ctx.reader.takeInt(u16, .big);
 
     // Jump passed the random start data
-    try testing.expectEqual(0x0501, try reader.reader.peekInt(u16, .big));
+    try testing.expectEqual(0x0501, try tc.ctx.reader.peekInt(u16, .big));
 
     {
-        const info = try getLengthFromBuffer(&reader);
+        const info = try getLengthFromBuffer(&tc.ctx.reader);
         try testing.expectEqual(15, info.bytes);
         try testing.expectEqual(3, info.label_count);
     }
 
-    _ = try reader.reader.take(16); // Move to end of first strings
-    try testing.expectEqual(0x02ab, try reader.reader.peekInt(u16, .big));
+    _ = try tc.ctx.reader.take(16); // Move to end of first strings
+    try testing.expectEqual(0x02ab, try tc.ctx.reader.peekInt(u16, .big));
 
     {
-        const info = try getLengthFromBuffer(&reader);
+        const info = try getLengthFromBuffer(&tc.ctx.reader);
         try testing.expectEqual(18, info.bytes);
         try testing.expectEqual(4, info.label_count);
     }
 }
 
 test "decode of simple compression" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
+    var tc = try t.TestContext.init(compressed_data);
+    defer tc.deinit();
 
-    var reader = try pool.getReader(.{ .fixed = compressed_data });
-    defer reader.deinit();
-
-    _ = try reader.reader.takeInt(u16, .big);
+    _ = try tc.ctx.reader.takeInt(u16, .big);
 
     // Jump passed the random start data
-    try testing.expectEqual(0x0501, try reader.reader.peekInt(u16, .big));
+    try testing.expectEqual(0x0501, try tc.ctx.reader.peekInt(u16, .big));
 
     {
-        var dns_name = try Name.decode(&reader);
+        var dns_name = try Name.decode(&tc.ctx);
         defer dns_name.deinit();
 
         const expected = &[_]u8{ 0x1, 0x2, 0x3, 0x4, 0x5, '.', 0xaa, 0xbb, 0xcc, '.', 0x1a, 0x2b, 0x3c, 0x4d, '.' };
         try expectEqualText(expected, dns_name);
     }
 
-    try testing.expectEqual(0x02ab, try reader.reader.peekInt(u16, .big));
+    try testing.expectEqual(0x02ab, try tc.ctx.reader.peekInt(u16, .big));
 
     {
-        var dns_name = try Name.decode(&reader);
+        var dns_name = try Name.decode(&tc.ctx);
         defer dns_name.deinit();
 
         const expected = &[_]u8{ 0xab, 0xcd, '.', 0x1, 0x2, 0x3, 0x4, 0x5, '.', 0xaa, 0xbb, 0xcc, '.', 0x1a, 0x2b, 0x3c, 0x4d, '.' };
@@ -626,9 +618,6 @@ test "decode of simple compression" {
 }
 
 test "decode rejects forward pointer" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
-
     {
         // Pointer at offset 0 points forward to offset 5 (invalid - must point backwards)
         const forward_pointer_data = &[_]u8{
@@ -637,10 +626,10 @@ test "decode rejects forward pointer" {
             0x03, 'c', 'o', 'm', 0x00, // Label at offset 5
         };
 
-        var reader = try pool.getReader(.{ .fixed = forward_pointer_data });
-        defer reader.deinit();
+        var tc = try t.TestContext.init(forward_pointer_data);
+        defer tc.deinit();
 
-        try testing.expectError(error.InvalidPointerAddress, Name.decode(&reader));
+        try testing.expectError(error.InvalidPointerAddress, Name.decode(&tc.ctx));
     }
 
     {
@@ -649,17 +638,14 @@ test "decode rejects forward pointer" {
             0xc0, 0x00, // Pointer to offset 0 (self-reference)
         };
 
-        var reader = try pool.getReader(.{ .fixed = self_ref_data });
-        defer reader.deinit();
+        var tc = try t.TestContext.init(self_ref_data);
+        defer tc.deinit();
 
-        try testing.expectError(error.InvalidPointerAddress, Name.decode(&reader));
+        try testing.expectError(error.InvalidPointerAddress, Name.decode(&tc.ctx));
     }
 }
 
 test "decode rejects reserved label headers" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
-
     var reserved_data: [9]u8 = .{
         0x03, 'w', 'w', 'w', // Valid label "www"
         0xc0, 'b', 'a', 'd', // Invalid: 0b01000000 header
@@ -670,27 +656,24 @@ test "decode rejects reserved label headers" {
         // 0b01xxxxxx (0x40-0x7F) is reserved
         reserved_data[4] = 0x40;
 
-        var reader = try pool.getReader(.{ .fixed = &reserved_data });
-        defer reader.deinit();
+        var tc = try t.TestContext.init(&reserved_data);
+        defer tc.deinit();
 
-        try testing.expectError(error.InvalidLabelHeader, Name.decode(&reader));
+        try testing.expectError(error.InvalidLabelHeader, Name.decode(&tc.ctx));
     }
 
     {
         // 0b10xxxxxx (0x80-0xBF) is reserved
         reserved_data[4] = 0x80;
 
-        var reader = try pool.getReader(.{ .fixed = &reserved_data });
-        defer reader.deinit();
+        var tc = try t.TestContext.init(&reserved_data);
+        defer tc.deinit();
 
-        try testing.expectError(error.InvalidLabelHeader, Name.decode(&reader));
+        try testing.expectError(error.InvalidLabelHeader, Name.decode(&tc.ctx));
     }
 }
 
 test "infinite loop rejection" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
-
     {
         const loop_data = &[_]u8{
             0x03, 'w', 'w', 'w', // Valid label "www"
@@ -698,10 +681,10 @@ test "infinite loop rejection" {
             0x00,
         };
 
-        var reader = try pool.getReader(.{ .fixed = loop_data });
-        defer reader.deinit();
+        var tc = try t.TestContext.init(loop_data);
+        defer tc.deinit();
 
-        try testing.expectError(error.InvalidPointerAddress, Name.decode(&reader));
+        try testing.expectError(error.InvalidPointerAddress, Name.decode(&tc.ctx));
     }
 
     {
@@ -710,32 +693,30 @@ test "infinite loop rejection" {
             0xc0, 0x05, // Point to ourselves
         };
 
-        var reader = try pool.getReader(.{ .fixed = loop_data });
-        defer reader.deinit();
+        var tc = try t.TestContext.init(loop_data);
+        defer tc.deinit();
 
         // Decode the www
-        const www = try Name.decode(&reader);
+        const www = try Name.decode(&tc.ctx);
         try expectEqualText("www.", www);
 
         // Make sure we can't point to ourselves
-        try testing.expectError(error.InvalidPointerAddress, Name.decode(&reader));
+        try testing.expectError(error.InvalidPointerAddress, Name.decode(&tc.ctx));
     }
 }
 
 test "basic encode" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
-
     const decode_buf = &[_]u8{ 0xa, 'd', 'u', 'c', 'k', 'd', 'u', 'c', 'k', 'g', 'o', 3, 'c', 'o', 'm', 0 };
-    var reader = try pool.getReader(.{ .fixed = decode_buf });
-    defer reader.deinit();
 
-    var decoded_name = try Name.decode(&reader);
+    var tc = try t.TestContext.init(decode_buf);
+    defer tc.deinit();
+
+    var decoded_name = try Name.decode(&tc.ctx);
     defer decoded_name.deinit();
 
     var encode_buf = std.mem.zeroes([512]u8);
-    var writer = try pool.getWriter(.{ .fixed = &encode_buf });
-    defer reader.deinit();
+    var writer = try tc.pool.getWriter(.{ .fixed = &encode_buf });
+    defer writer.deinit();
 
     // Note, we don't deallocate this name since we don't allocate anything
     // var encoded_name = Name{
@@ -822,9 +803,6 @@ test "fromStr root domain only" {
 // }
 
 test "encode length" {
-    var pool = try DNSMemory.init();
-    defer pool.deinit();
-
     {
         var dns_name = try Name.fromStr("example.com.");
         defer dns_name.deinit();
@@ -996,9 +974,6 @@ test "name validate - total length too long" {
 
     // Same as above, but test wire decoding
     {
-        var pool = try DNSMemory.init();
-        defer pool.deinit();
-
         // We can only store 254 non-root bytes
         const one_too_long =
             "\x1Faaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ++ // 32
@@ -1009,9 +984,10 @@ test "name validate - total length too long" {
             "\x1Ffffffffffffffffffffffffffffffff" ++ // 192
             "\x1Fggggggggggggggggggggggggggggggg" ++ // 224
             "\x1E0123456789abcdef01234567890abc"; // 255
-        var reader_invalid = try pool.getReader(.{ .fixed = one_too_long });
-        defer reader_invalid.deinit();
-        const one_too_long_name = Name.decode(&reader_invalid);
+
+        var tc_invalid = try t.TestContext.init(one_too_long);
+        defer tc_invalid.deinit();
+        const one_too_long_name = Name.decode(&tc_invalid.ctx);
         try testing.expectError(error.NameTooLong, one_too_long_name);
 
         const close_but_no_cigar_str =
@@ -1026,9 +1002,9 @@ test "name validate - total length too long" {
 
         try testing.expectEqual(255, close_but_no_cigar_str.len);
 
-        var reader_valid = try pool.getReader(.{ .fixed = close_but_no_cigar_str });
-        defer reader_valid.deinit();
-        const close_but_no_cigar_name = try Name.decode(&reader_valid);
+        var tc_valid = try t.TestContext.init(close_but_no_cigar_str);
+        defer tc_valid.deinit();
+        const close_but_no_cigar_name = try Name.decode(&tc_valid.ctx);
 
         try testing.expectEqual(8, close_but_no_cigar_name.labelCount());
         // Includes root label length
@@ -1037,9 +1013,6 @@ test "name validate - total length too long" {
 
     // Test to make sure our wire encoded names have a root label
     {
-        var pool = try DNSMemory.init();
-        defer pool.deinit();
-
         const no_root_str =
             "\x1Faaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ++ // 32
             "\x1Fbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ++ // 64
@@ -1052,9 +1025,9 @@ test "name validate - total length too long" {
 
         try testing.expectEqual(254, no_root_str.len);
 
-        var reader_valid = try pool.getReader(.{ .fixed = no_root_str });
-        defer reader_valid.deinit();
-        const no_root_name = Name.decode(&reader_valid);
+        var tc = try t.TestContext.init(no_root_str);
+        defer tc.deinit();
+        const no_root_name = Name.decode(&tc.ctx);
 
         try testing.expectError(error.NoRootLabel, no_root_name);
     }

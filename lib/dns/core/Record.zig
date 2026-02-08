@@ -10,8 +10,7 @@ const Class = codes.Class;
 const Name = @import("Name.zig");
 
 const treebeard = @import("treebeard");
-const DNSMemory = treebeard.DNSMemory;
-const DNSReader = treebeard.DNSReader;
+const Context = treebeard.Context;
 const DNSWriter = treebeard.DNSWriter;
 
 //--------------------------------------------------
@@ -20,8 +19,8 @@ const DNSWriter = treebeard.DNSWriter;
 /// Resource Record
 const Record = @This();
 
-/// Allocator for handling name and rdata init
-memory: *DNSMemory,
+/// Context for handling name and rdata init
+allocator: Allocator,
 
 /// Name of the node to which this record pertains
 name: Name,
@@ -72,7 +71,7 @@ pub const RData = union(enum) {
     // },
     Unknown: []u8, // For unimplemented types
 
-    pub fn deinit(self: *RData, memory: *DNSMemory) void {
+    pub fn deinit(self: *RData, alloc: Allocator) void {
         switch (self.*) {
             .MX => |*mx| mx.exchanger.deinit(),
             .CNAME => |*name| name.deinit(),
@@ -83,72 +82,72 @@ pub const RData = union(enum) {
                 soa.rname.deinit();
             },
             .TXT => |txt| {
-                memory.alloc().free(txt);
+                alloc.free(txt);
             },
-            .Unknown => |data| memory.alloc().free(data),
+            .Unknown => |data| alloc.free(data),
             else => {},
         }
     }
 };
 
 /// Decode the Record type from the encoded DNS data
-pub fn decode(reader: *DNSReader) !Record {
-    var n = try Name.decode(reader);
+pub fn decode(ctx: *Context) !Record {
+    var n = try Name.decode(ctx);
     errdefer n.deinit();
 
-    const t = try Type.decode(reader);
-    const c = try Class.decode(reader);
-    const ttl = try reader.reader.takeInt(u32, .big);
-    const rdlength = try reader.reader.takeInt(u16, .big);
+    const t = try Type.decode(ctx);
+    const c = try Class.decode(ctx);
+    const ttl = try ctx.reader.takeInt(u32, .big);
+    const rdlength = try ctx.reader.takeInt(u16, .big);
 
     // Parse RDATA based on type
     const rdata = switch (t) {
         .A => blk: {
             if (rdlength != 4) return error.InvalidARecord;
-            const data = try reader.reader.take(4);
+            const data = try ctx.reader.take(4);
             var addr: [4]u8 = undefined;
             @memcpy(&addr, data);
             break :blk RData{ .A = addr };
         },
         .AAAA => blk: {
             if (rdlength != 16) return error.InvalidAAAARecord;
-            const data = try reader.reader.take(16);
+            const data = try ctx.reader.take(16);
             var addr: [16]u8 = undefined;
             @memcpy(&addr, data);
             break :blk RData{ .AAAA = addr };
         },
         .MX => blk: {
             if (rdlength < 3) return error.InvalidMXRecord;
-            const pref = try reader.reader.takeInt(u16, .big);
-            const exchanger = try Name.decode(reader);
+            const pref = try ctx.reader.takeInt(u16, .big);
+            const exchanger = try Name.decode(ctx);
             break :blk RData{ .MX = .{ .preference = pref, .exchanger = exchanger } };
         },
         .CNAME => blk: {
-            const cname = try Name.decode(reader);
+            const cname = try Name.decode(ctx);
             break :blk RData{ .CNAME = cname };
         },
         .NS => blk: {
-            const ns = try Name.decode(reader);
+            const ns = try Name.decode(ctx);
             break :blk RData{ .NS = ns };
         },
         .PTR => blk: {
-            const ptr = try Name.decode(reader);
+            const ptr = try Name.decode(ctx);
             break :blk RData{ .PTR = ptr };
         },
         .TXT => blk: {
-            const data = try reader.reader.take(rdlength);
-            const owned = try reader.memory.alloc().dupe(u8, data);
+            const data = try ctx.reader.take(rdlength);
+            const owned = try ctx.alloc().dupe(u8, data);
             break :blk RData{ .TXT = owned };
         },
         else => blk: {
-            const data = try reader.reader.take(rdlength);
-            const owned = try reader.memory.alloc().dupe(u8, data);
+            const data = try ctx.reader.take(rdlength);
+            const owned = try ctx.alloc().dupe(u8, data);
             break :blk RData{ .Unknown = owned };
         },
     };
 
     return Record{
-        .memory = reader.memory,
+        .allocator = ctx.alloc(),
         .name = n,
         .type = t,
         .class = c,
@@ -256,5 +255,5 @@ pub fn display(self: *const Record) !void {
 /// Deinit the Record type
 pub fn deinit(self: *Record) void {
     self.name.deinit();
-    self.rdata.deinit(self.memory);
+    self.rdata.deinit(self.allocator);
 }

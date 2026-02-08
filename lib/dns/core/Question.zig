@@ -9,17 +9,15 @@ const Type = codes.Type;
 const Class = codes.Class;
 const Name = @import("Name.zig");
 
-const DNSMemory = @import("../pool.zig").DNSMemory;
-const DNSReader = @import("../pool.zig").DNSReader;
-const DNSWriter = @import("../pool.zig").DNSWriter;
+const treebeard = @import("treebeard");
+const Context = treebeard.Context;
+const DNSWriter = treebeard.DNSWriter;
 
 //--------------------------------------------------
 // DNS Question
 
 /// DNS question (query)
 const Question = @This();
-
-memory: *DNSMemory,
 
 /// Name of the requested resource
 name: Name,
@@ -30,15 +28,14 @@ type: Type,
 /// Class code
 class: Class,
 
-pub fn decode(reader: *DNSReader) !Question {
-    var name = try Name.decode(reader);
+pub fn decode(ctx: *Context) !Question {
+    var name = try Name.decode(ctx);
     errdefer name.deinit();
 
-    const typeRR = try codes.Type.decode(reader);
-    const classRR = try codes.Class.decode(reader);
+    const typeRR = try codes.Type.decode(ctx);
+    const classRR = try codes.Class.decode(ctx);
 
     return Question{
-        .memory = reader.memory,
         .name = name,
         .type = typeRR,
         .class = classRR,
