@@ -8,10 +8,10 @@ This is a stub mirror. The source code lives on Forgejo.
 
 | Branch | Commit | Link |
 |--------|--------|------|
-| `master` | `91bf17f03472` | [view](https://git.bitcicle.com/andy/treebeard/src/commit/91bf17f034728cbb7583ce2cc31eda2acb6756b5) |
-| `nsupdate` | `47bbb73fb60d` | [view](https://git.bitcicle.com/andy/treebeard/src/commit/47bbb73fb60d9b6814cfe79862a77c480fd3ead8) |
+| `nsupdate` | `fa9378bf604c` | [view](https://git.bitcicle.com/andy/treebeard/src/commit/fa9378bf604cc7261ced7630c245b26a744a6ec5) |
+| `master` | `7eb1e653da04` | [view](https://git.bitcicle.com/andy/treebeard/src/commit/7eb1e653da04ac20803592323b9750cd449268fd) |
 | `label-list` | `6c8304e66f3f` | [view](https://git.bitcicle.com/andy/treebeard/src/commit/6c8304e66f3f0ecafbb8763539466d9048f243e6) |
 
 ---
 
-*Last updated: 2026-03-16 20:00:39 UTC*
+*Last updated: 2026-03-16 21:50:44 UTC*
