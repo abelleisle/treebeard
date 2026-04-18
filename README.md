@@ -8,7 +8,7 @@ This is a stub mirror. The source code lives on Forgejo.
 
 | Branch | Commit | Link |
 |--------|--------|------|
-| `performance` | `40e2d47ece4a` | [view](https://git.bitcicle.com/andy/treebeard/src/commit/40e2d47ece4a622c45ef1e864586f21d7a79547f) |
+| `performance` | `133d993bc4c0` | [view](https://git.bitcicle.com/andy/treebeard/src/commit/133d993bc4c05da028710a1b506fa48d050a9f41) |
 | `authoritative` | `3519fc1c9ba1` | [view](https://git.bitcicle.com/andy/treebeard/src/commit/3519fc1c9ba1c63badb10dc09f2f7369b17d1661) |
 | `master` | `995a5bb1b830` | [view](https://git.bitcicle.com/andy/treebeard/src/commit/995a5bb1b830fd699187c4d014e1e307e7edb55d) |
 | `unified_storage` | `745ccf349671` | [view](https://git.bitcicle.com/andy/treebeard/src/commit/745ccf349671432fae26da386c73b83caf338d52) |
@@ -17,4 +17,4 @@ This is a stub mirror. The source code lives on Forgejo.
 
 ---
 
-*Last updated: 2026-04-18 20:50:53 UTC*
+*Last updated: 2026-04-18 21:00:35 UTC*
